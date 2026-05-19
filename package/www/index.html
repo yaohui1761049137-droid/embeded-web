@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Login - LubanCat</title>
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div class="login-container">
+        <h1>LubanCat Web Control</h1>
+        <p class="subtitle">RK3566 Embedded Boa Server</p>
+        <form method="POST" action="/cgi-bin/login.cgi">
+            <div class="form-group">
+                <label for="user">Username:</label>
+                <input type="text" id="user" name="user" value="admin" required>
+            </div>
+            <div class="form-group">
+                <label for="pass">Password:</label>
+                <input type="password" id="pass" name="pass" value="admin" required>
+            </div>
+            <div class="form-group">
+                <input type="submit" value="Login">
+            </div>
+        </form>
+        <p class="footer">Default credentials: admin / admin</p>
+    </div>
+</body>
+</html>

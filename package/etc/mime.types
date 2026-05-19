@@ -1,0 +1,13 @@
+text/html                      html htm shtml
+text/css                       css
+text/plain                     txt
+text/javascript                js
+application/json               json
+image/png                      png
+image/jpeg                     jpeg jpg
+image/gif                      gif
+image/x-icon                   ico
+application/octet-stream       bin
+application/x-gzip             gz tgz
+application/x-tar              tar
+application/zip                zip
