@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Login - Zynq Web Control</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;1,400&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+    <div class="split-layout">
+        <!-- Left: placeholder for future branding/content -->
+        <div class="split-left">
+            <div class="brand-placeholder">
+                <div class="brand-ring"></div>
+                <p class="brand-hint">预留品牌区域</p>
+            </div>
+        </div>
+
+        <!-- Right: login panel -->
+        <div class="split-right">
+            <div class="login-card">
+                <div class="login-header">
+                    <h1>Welcome Back</h1>
+                    <p class="login-subtitle">Sign in to your device</p>
+                </div>
+                <form method="POST" action="/cgi-bin/login.cgi">
+                    <div class="field-group">
+                        <label for="user">Username</label>
+                        <div class="input-wrap">
+                            <svg class="input-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                            <input type="text" id="user" name="user" value="root" required>
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <label for="pass">Password</label>
+                        <div class="input-wrap">
+                            <svg class="input-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                            <input type="password" id="pass" name="pass" value="admin" required>
+                        </div>
+                    </div>
+                    <button type="submit" class="login-btn">Sign In</button>
+                </form>
+                <p class="login-footer">Default credentials: <span>root / admin</span></p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

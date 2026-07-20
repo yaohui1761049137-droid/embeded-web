@@ -1,0 +1,24 @@
+# Build artifacts
+*.o
+*.cgi
+db_init
+*.tar.gz
+*.deb
+
+# Database
+*.db
+*.db-wal
+*.db-shm
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# TLS certs (generated locally)
+*.pem
+*.key
+*.crt

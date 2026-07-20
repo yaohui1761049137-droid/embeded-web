@@ -1,0 +1,698 @@
+/* ============================================
+   Zynq Web Control - Stylesheet
+   ============================================ */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    min-height: 100vh;
+    background: linear-gradient(135deg, #f3e6ea 0%, #e5e5f0 40%, #dee5f0 100%);
+    color: #2d2d3a;
+}
+
+/* ============================================
+   LOGIN PAGE — split layout
+   ============================================ */
+
+.split-layout {
+    display: flex;
+    min-height: 100vh;
+}
+
+/* Left side — placeholder */
+
+.split-left {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 3rem;
+}
+
+.brand-placeholder {
+    text-align: center;
+}
+
+.brand-ring {
+    width: 140px;
+    height: 140px;
+    margin: 0 auto 1.5rem;
+    border-radius: 50%;
+    border: 2px dashed rgba(160, 150, 180, 0.3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+}
+
+.brand-ring::before {
+    content: "";
+    position: absolute;
+    inset: 12px;
+    border-radius: 50%;
+    border: 2px dashed rgba(160, 150, 180, 0.18);
+}
+
+.brand-ring::after {
+    content: "";
+    position: absolute;
+    inset: 30px;
+    border-radius: 50%;
+    background: rgba(196, 181, 208, 0.15);
+    animation: pulse-ring 3s ease-in-out infinite;
+}
+
+@keyframes pulse-ring {
+    0%, 100% { transform: scale(1); opacity: 0.5; }
+    50% { transform: scale(1.08); opacity: 0.8; }
+}
+
+.brand-hint {
+    color: rgba(120, 110, 140, 0.5);
+    font-size: 0.85rem;
+    letter-spacing: 0.05em;
+    margin-top: 0.5rem;
+}
+
+/* Right side — login card */
+
+.split-right {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 3rem;
+}
+
+.login-card {
+    width: 100%;
+    max-width: 400px;
+    background: #ffffff;
+    border-radius: 20px;
+    padding: 2.8rem 2.5rem;
+    box-shadow:
+        0 4px 24px rgba(120, 110, 150, 0.08),
+        0 20px 60px rgba(120, 110, 150, 0.10);
+    animation: card-enter 0.6s ease-out both;
+}
+
+@keyframes card-enter {
+    from {
+        opacity: 0;
+        transform: translateY(20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.login-header {
+    margin-bottom: 2rem;
+    text-align: center;
+}
+
+.login-header h1 {
+    font-family: "Playfair Display", Georgia, serif;
+    font-weight: 600;
+    font-size: 1.8rem;
+    color: #2d2d3a;
+    margin-bottom: 0.3rem;
+}
+
+.login-subtitle {
+    color: #9a9aab;
+    font-size: 0.9rem;
+    font-weight: 400;
+}
+
+.field-group {
+    margin-bottom: 1.3rem;
+}
+
+.field-group label {
+    display: block;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: #6a6a7a;
+    margin-bottom: 0.4rem;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+}
+
+.input-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+}
+
+.input-icon {
+    position: absolute;
+    left: 14px;
+    color: #b8b8c8;
+    pointer-events: none;
+    transition: color 0.2s;
+}
+
+.input-wrap input {
+    width: 100%;
+    padding: 0.85rem 1rem 0.85rem 2.6rem;
+    border: 1.5px solid #e8e8f0;
+    border-radius: 10px;
+    font-family: inherit;
+    font-size: 0.95rem;
+    color: #2d2d3a;
+    background: #fafafe;
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+}
+
+.input-wrap input:focus {
+    border-color: #c4b5d0;
+    background: #ffffff;
+    box-shadow: 0 0 0 4px rgba(196, 181, 208, 0.12);
+}
+
+.input-wrap:focus-within .input-icon {
+    color: #b5a6c2;
+}
+
+.input-wrap input::placeholder {
+    color: #c8c8d4;
+}
+
+.login-btn {
+    width: 100%;
+    padding: 0.9rem;
+    margin-top: 0.5rem;
+    border: none;
+    border-radius: 10px;
+    background: linear-gradient(135deg, #d4c4d8 0%, #c4b5d0 100%);
+    color: #fff;
+    font-family: inherit;
+    font-size: 1rem;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.2s;
+}
+
+.login-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px rgba(196, 181, 208, 0.3);
+}
+
+.login-btn:active {
+    transform: translateY(0);
+}
+
+.login-footer {
+    text-align: center;
+    margin-top: 1.5rem;
+    font-size: 0.78rem;
+    color: #b0b0be;
+}
+
+.login-footer span {
+    color: #b8a9c9;
+    font-weight: 500;
+}
+
+/* ============================================
+   CONTROL PANEL — app layout with nav
+   ============================================ */
+
+.app-layout {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Top navigation bar */
+
+.top-nav {
+    background: rgba(255, 255, 255, 0.78);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-bottom: 1px solid rgba(200, 190, 210, 0.25);
+    display: flex;
+    align-items: center;
+    padding: 0 1.5rem;
+    height: 58px;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+.nav-brand {
+    font-family: "Playfair Display", Georgia, serif;
+    font-weight: 600;
+    font-size: 1.05rem;
+    color: #3d3d4a;
+    margin-right: 2rem;
+    white-space: nowrap;
+}
+
+.nav-links {
+    display: flex;
+    gap: 0.15rem;
+    overflow-x: auto;
+    flex: 1;
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+
+.nav-links::-webkit-scrollbar {
+    display: none;
+}
+
+.nav-links a {
+    padding: 0.5rem 0.9rem;
+    font-size: 0.82rem;
+    font-weight: 500;
+    color: #7a7a8a;
+    text-decoration: none;
+    border-radius: 6px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color 0.2s, background 0.2s;
+}
+
+.nav-links a:hover {
+    color: #3d3d4a;
+    background: rgba(196, 181, 208, 0.12);
+}
+
+.nav-links a.active {
+    color: #7a6a8a;
+    background: rgba(196, 181, 208, 0.18);
+}
+
+.nav-right {
+    margin-left: auto;
+}
+
+.logout-link {
+    padding: 0.5rem 1rem;
+    font-size: 0.82rem;
+    color: #b8a0a0;
+    text-decoration: none;
+    border-radius: 6px;
+    transition: color 0.2s, background 0.2s;
+}
+
+.logout-link:hover {
+    color: #cc6060;
+    background: rgba(204, 96, 96, 0.08);
+}
+
+/* Main content area */
+
+.main-content {
+    flex: 1;
+    padding: 2rem 1.5rem;
+    display: flex;
+    justify-content: center;
+}
+
+.tab-content {
+    display: none;
+    width: 100%;
+    max-width: 780px;
+    background: rgba(255, 255, 255, 0.55);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-radius: 16px;
+    padding: 2rem 2.5rem;
+    box-shadow: 0 2px 20px rgba(120, 110, 150, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.45);
+    animation: panel-fade 0.25s ease-out;
+}
+
+@keyframes panel-fade {
+    from { opacity: 0; transform: translateY(6px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+.tab-content.active {
+    display: block;
+}
+
+.tab-content h2 {
+    font-size: 1.25rem;
+    color: #2d2d3a;
+    margin-bottom: 0.4rem;
+    font-weight: 600;
+}
+
+.tab-status {
+    font-size: 0.85rem;
+    color: #6a9a7a;
+    margin-bottom: 1.5rem;
+}
+
+.placeholder-text {
+    text-align: center;
+    color: #b0b0be;
+    font-size: 0.9rem;
+    padding: 3rem 0;
+}
+
+/* Send section (tab: status) */
+
+.send-section {
+    background: rgba(255, 255, 255, 0.5);
+    border-radius: 12px;
+    padding: 1.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.6);
+}
+
+.send-section h3 {
+    font-size: 1rem;
+    color: #3d3d4a;
+    margin-bottom: 1rem;
+    font-weight: 500;
+}
+
+button#sendBtn {
+    width: 100%;
+    padding: 0.85rem;
+    border: none;
+    border-radius: 10px;
+    background: linear-gradient(135deg, #d4c4d8 0%, #c4b5d0 100%);
+    color: #fff;
+    font-family: inherit;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.2s;
+}
+
+button#sendBtn:hover:not(:disabled) {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px rgba(196, 181, 208, 0.25);
+}
+
+button#sendBtn:disabled {
+    background: #d8d8e0;
+    color: #aaa;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+#result {
+    margin-top: 1rem;
+}
+
+.success {
+    color: #4a8a5a;
+    background: rgba(74, 138, 90, 0.07);
+    padding: 0.7rem 1rem;
+    border-radius: 8px;
+    border: 1px solid rgba(74, 138, 90, 0.15);
+    font-size: 0.85rem;
+}
+
+.error {
+    color: #c45050;
+    background: rgba(196, 80, 80, 0.07);
+    padding: 0.7rem 1rem;
+    border-radius: 8px;
+    border: 1px solid rgba(196, 80, 80, 0.15);
+    font-size: 0.85rem;
+}
+
+.info {
+    color: #5088b0;
+    background: rgba(80, 136, 176, 0.07);
+    padding: 0.7rem 1rem;
+    border-radius: 8px;
+    border: 1px solid rgba(80, 136, 176, 0.15);
+    font-size: 0.85rem;
+}
+
+/* ============================================
+   NETWORK CONFIG TAB — redesigned
+   ============================================ */
+
+/* --- Toolbar: board tabs + refresh button --- */
+
+.network-toolbar {
+    display: flex;
+    align-items: center;
+    margin: 1rem 0 1.5rem;
+    gap: 0.5rem;
+}
+
+.board-tabs {
+    display: flex;
+    gap: 0;
+    flex: 1;
+}
+
+.board-tab {
+    padding: 0.5rem 1.2rem;
+    font-size: 0.84rem;
+    font-weight: 500;
+    color: #3d3d4a;
+    text-decoration: none;
+    cursor: pointer;
+    background: #e5e7eb;
+    transition: background 0.2s, color 0.2s;
+    user-select: none;
+}
+
+.board-tab:first-child {
+    border-radius: 6px 0 0 6px;
+}
+
+.board-tab:last-child {
+    border-radius: 0 6px 6px 0;
+}
+
+.board-tab:not(:first-child):not(:last-child) {
+    border-radius: 0;
+}
+
+.board-tab:hover {
+    background: #dcdde2;
+}
+
+.board-tab.active {
+    background: #f1edf4;
+    color: #1a1a2e;
+    font-weight: 600;
+}
+
+.btn-refresh {
+    padding: 0.5rem 1rem;
+    font-size: 0.84rem;
+    font-weight: 500;
+    color: #3d3d4a;
+    background: #ffffff;
+    border: 1px solid #d4d4d8;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: background 0.15s, border-color 0.15s;
+    white-space: nowrap;
+}
+
+.btn-refresh:hover {
+    background: #f5f5f8;
+    border-color: #c4b5d0;
+}
+
+/* --- Config Panel --- */
+
+.config-panel {
+    background: #ffffff;
+    border-radius: 10px;
+    margin-bottom: 1.2rem;
+    overflow: hidden;
+    border: 1px solid #e8e8ec;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+}
+
+.panel-header {
+    background: #f1edf4;
+    color: #1a1a2e;
+    font-weight: 700;
+    font-size: 0.92rem;
+    text-align: center;
+    padding: 0.7rem 1rem;
+    letter-spacing: 0.04em;
+}
+
+.panel-body {
+    padding: 0;
+}
+
+/* --- Config Table (two-column: label + value) --- */
+
+.config-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+}
+
+.config-table tr {
+    border-bottom: 1px solid #f0f0f3;
+}
+
+.config-table tr:last-child {
+    border-bottom: none;
+}
+
+.config-label {
+    width: 130px;
+    background: #f3f4f6;
+    color: #4a4a5a;
+    font-size: 0.84rem;
+    font-weight: 500;
+    text-align: right;
+    padding: 0.75rem 1rem;
+    vertical-align: middle;
+    white-space: nowrap;
+}
+
+.config-value {
+    background: #ffffff;
+    padding: 0.75rem 1rem;
+    vertical-align: middle;
+}
+
+/* --- Segmented IP Input --- */
+
+.ip-segments {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.ip-octet {
+    width: 52px;
+    padding: 0.5rem 0;
+    border: 1.5px solid #e0e0e8;
+    border-radius: 6px;
+    text-align: center;
+    font-family: "DM Sans", monospace;
+    font-size: 0.95rem;
+    color: #2d2d3a;
+    background: #fafafe;
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    box-sizing: border-box;
+}
+
+.ip-octet:focus {
+    border-color: #b5a6c2;
+    background: #ffffff;
+    box-shadow: 0 0 0 3px rgba(181, 166, 194, 0.15);
+    z-index: 1;
+    position: relative;
+}
+
+.ip-dot {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #9a9aab;
+    padding: 0 1px;
+    user-select: none;
+}
+
+/* --- Full-width Input (IPv6) --- */
+
+.input-full {
+    width: 100%;
+    padding: 0.6rem 0.8rem;
+    border: 1.5px solid #e0e0e8;
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 0.92rem;
+    color: #2d2d3a;
+    background: #fafafe;
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    box-sizing: border-box;
+}
+
+.input-full:focus {
+    border-color: #b5a6c2;
+    background: #ffffff;
+    box-shadow: 0 0 0 3px rgba(181, 166, 194, 0.12);
+}
+
+.input-full::placeholder {
+    color: #c8c8d4;
+}
+
+/* --- Static IP text --- */
+
+.static-ip-text {
+    font-size: 0.9rem;
+    color: #3d3d4a;
+    font-weight: 500;
+}
+
+/* --- Panel Actions --- */
+
+.panel-actions {
+    padding: 0.9rem 1rem;
+    text-align: center;
+    border-top: 1px solid #f0f0f3;
+}
+
+.btn-set {
+    padding: 0.55rem 2.5rem;
+    border: 1.5px solid #c8c8d0;
+    border-radius: 8px;
+    font-family: inherit;
+    font-size: 0.88rem;
+    font-weight: 500;
+    color: #3d3d4a;
+    background: #fafafe;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+
+.btn-set:hover {
+    border-color: #b5a6c2;
+    background: #ffffff;
+    box-shadow: 0 2px 8px rgba(181, 166, 194, 0.15);
+}
+
+.btn-set:active {
+    background: #f5f5f8;
+}
+
+/* --- Status Message --- */
+
+.status-msg {
+    display: inline-block;
+    margin-top: 0.5rem;
+    font-size: 0.82rem;
+    padding: 0.35rem 0.7rem;
+    border-radius: 6px;
+}
+
+.status-success {
+    color: #4a8a5a;
+    background: rgba(74, 138, 90, 0.08);
+}
+
+.status-error {
+    color: #c45050;
+    background: rgba(196, 80, 80, 0.08);
+}
+
+.status-info {
+    color: #5088b0;
+    background: rgba(80, 136, 176, 0.08);
+}

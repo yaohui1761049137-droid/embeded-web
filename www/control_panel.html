@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Control Panel - Zynq</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;1,400&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<script>
+/* Redirect if no session cookie — prevents direct URL access bypassing login */
+/* Helper: read CSRF token from cookie (not HttpOnly, JS-readable) */
+function getCSRF() {
+    var m = document.cookie.match(/csrf_token=([^;]+)/);
+    return m ? m[1] : '';
+}
+if (!document.cookie.match(/csrf_token=/)) {
+    window.location.href = '/index.html';
+}
+</script>
+
+<div class="app-layout">
+
+<!-- Top navigation bar -->
+<nav class="top-nav">
+<div class="nav-brand">Zynq Web Control</div>
+<div class="nav-links">
+<a data-tab="status" onclick="switchTab('status')" class="active">服务器状态查看</a>
+<a data-tab="network" onclick="switchTab('network');loadRemoteConfig()">网络参数配置</a>
+<a data-tab="ntp" onclick="switchTab('ntp')">NTP及PTP时间服务配置</a>
+<a data-tab="monitor" onclick="switchTab('monitor')">服务监控及报警</a>
+<a data-tab="timesync" onclick="switchTab('timesync')">时间服务校验设置</a>
+<a data-tab="redundancy" onclick="switchTab('redundancy')">主备协同配置</a>
+</div>
+<div class="nav-right"><a href="/cgi-bin/logout.cgi" class="logout-link">退出</a></div>
+</nav>
+
+<!-- Main content area -->
+<div class="main-content">
+
+<!-- Tab 1: 服务器状态查看 -->
+<div id="tab-status" class="tab-content active">
+<h2>服务器状态查看</h2>
+<p class="tab-status">● System Ready</p>
+<div class="send-section">
+<h3>串口调试</h3>
+<button id="sendBtn" onclick="sendCommand()">Send Data via Serial</button>
+<div id="result"></div>
+</div>
+</div>
+
+<!-- Tab 2: 网络参数配置 (Redesigned) -->
+<div id="tab-network" class="tab-content">
+<h2>网络参数配置</h2>
+
+<!-- Board tabs toolbar -->
+<div class="network-toolbar">
+<div class="board-tabs">
+<a class="board-tab active" data-board="1" onclick="switchBoard(1)">Board 1</a>
+<a class="board-tab" data-board="2" onclick="switchBoard(2)">Board 2</a>
+<a class="board-tab" data-board="3" onclick="switchBoard(3)">Board 3</a>
+<a class="board-tab" data-board="4" onclick="switchBoard(4)">Board 4</a>
+</div>
+<button class="btn-refresh" onclick="refreshRemoteConfig()">刷新</button>
+</div>
+
+<!-- Board 1 config -->
+<div id="board-config">
+
+<!-- IPv4 Panel -->
+<div class="config-panel">
+<div class="panel-header">IP地址</div>
+<div class="panel-body">
+<table class="config-table">
+<tr>
+<td class="config-label">地址类型</td>
+<td class="config-value"><span class="static-ip-text">Static IP</span></td>
+</tr>
+<tr>
+<td class="config-label">IP</td>
+<td class="config-value">
+<div class="ip-segments" id="ip-segments">
+<input type="text" class="ip-octet" id="ip-o0" maxlength="3" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+<span class="ip-dot">.</span>
+<input type="text" class="ip-octet" id="ip-o1" maxlength="3" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+<span class="ip-dot">.</span>
+<input type="text" class="ip-octet" id="ip-o2" maxlength="3" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+<span class="ip-dot">.</span>
+<input type="text" class="ip-octet" id="ip-o3" maxlength="3" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+</div>
+</td>
+</tr>
+<tr>
+<td class="config-label">子网掩码</td>
+<td class="config-value">
+<div class="ip-segments" id="mask-segments">
+<input type="text" class="ip-octet" id="mask-o0" maxlength="3" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+<span class="ip-dot">.</span>
+<input type="text" class="ip-octet" id="mask-o1" maxlength="3" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+<span class="ip-dot">.</span>
+<input type="text" class="ip-octet" id="mask-o2" maxlength="3" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+<span class="ip-dot">.</span>
+<input type="text" class="ip-octet" id="mask-o3" maxlength="3" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+</div>
+</td>
+</tr>
+<tr>
+<td class="config-label">网关</td>
+<td class="config-value">
+<div class="ip-segments" id="gw-segments">
+<input type="text" class="ip-octet" id="gw-o0" maxlength="3" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+<span class="ip-dot">.</span>
+<input type="text" class="ip-octet" id="gw-o1" maxlength="3" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+<span class="ip-dot">.</span>
+<input type="text" class="ip-octet" id="gw-o2" maxlength="3" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+<span class="ip-dot">.</span>
+<input type="text" class="ip-octet" id="gw-o3" maxlength="3" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
+</div>
+</td>
+</tr>
+</table>
+<div class="panel-actions">
+<button class="btn-set" onclick="saveIPv4()">设置</button>
+</div>
+</div>
+</div>
+
+<!-- IPv6 Panel -->
+<div class="config-panel">
+<div class="panel-header">IPv6地址</div>
+<div class="panel-body">
+<table class="config-table">
+<tr>
+<td class="config-label">IPv6静态地址</td>
+<td class="config-value">
+<input type="text" class="input-full" id="remote-ipv6" placeholder="2001:db8::1/64" autocomplete="off">
+</td>
+</tr>
+</table>
+<div class="panel-actions">
+<button class="btn-set" onclick="saveIPv6()">设置</button>
+</div>
+</div>
+</div>
+
+<span id="remote-status"></span>
+</div><!-- end board-config -->
+
+<!-- Placeholder for Boards 2-4 -->
+<div id="board-placeholder" style="display:none">
+<p class="placeholder-text">该 Board 将在后续版本中支持</p>
+</div>
+
+</div><!-- end tab-network -->
+
+<!-- Tab 3-6: Placeholders -->
+<div id="tab-ntp" class="tab-content">
+<h2>NTP及PTP时间服务配置</h2>
+<p class="placeholder-text">开发中...</p>
+</div>
+
+<div id="tab-monitor" class="tab-content">
+<h2>服务监控及报警</h2>
+<p class="placeholder-text">开发中...</p>
+</div>
+
+<div id="tab-timesync" class="tab-content">
+<h2>时间服务校验设置</h2>
+<p class="placeholder-text">开发中...</p>
+</div>
+
+<div id="tab-redundancy" class="tab-content">
+<h2>主备协同配置</h2>
+<p class="placeholder-text">开发中...</p>
+</div>
+
+</div><!-- end main-content -->
+</div><!-- end app-layout -->
+
+<script>
+/* ================================================================
+   Tab Switching
+   ================================================================ */
+function switchTab(tab) {
+    var links = document.querySelectorAll('.nav-links a');
+    var panels = document.querySelectorAll('.tab-content');
+    for (var i = 0; i < links.length; i++) links[i].classList.remove('active');
+    for (var i = 0; i < panels.length; i++) panels[i].classList.remove('active');
+    document.querySelector('.nav-links a[data-tab="' + tab + '"]').classList.add('active');
+    document.getElementById('tab-' + tab).classList.add('active');
+}
+
+/* ================================================================
+   Serial Send (Tab 1)
+   ================================================================ */
+function sendCommand() {
+    var btn = document.getElementById('sendBtn');
+    var res = document.getElementById('result');
+    btn.disabled = true;
+    btn.textContent = 'Sending...';
+    res.innerHTML = '<p class="info">Sending via serial port...</p>';
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/cgi-bin/action.cgi', true);
+    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+    xhr.onload = function() {
+        if (xhr.status == 200) {
+            try {
+                var r = JSON.parse(xhr.responseText);
+                if (r.status == 'ok')
+                    res.innerHTML = '<p class="success">' + r.message + '</p>';
+                else
+                    res.innerHTML = '<p class="error">Error: ' + r.message + '</p>';
+            } catch(e) { res.innerHTML = '<p class="error">Parse error</p>'; }
+        } else { res.innerHTML = '<p class="error">HTTP ' + xhr.status + '</p>'; }
+        btn.disabled = false;
+        btn.textContent = 'Send Data via Serial';
+    };
+    xhr.onerror = function() {
+        res.innerHTML = '<p class="error">Network error</p>';
+        btn.disabled = false;
+        btn.textContent = 'Send Data via Serial';
+    };
+    xhr.send('action=send');
+}
+
+/* ================================================================
+   Board Tab Switching
+   ================================================================ */
+var currentBoard = 1;
+
+function switchBoard(b) {
+    currentBoard = b;
+    var tabs = document.querySelectorAll('.board-tab');
+    for (var i = 0; i < tabs.length; i++) tabs[i].classList.remove('active');
+    document.querySelector('.board-tab[data-board="' + b + '"]').classList.add('active');
+    if (b == 1) {
+        document.getElementById('board-config').style.display = 'block';
+        document.getElementById('board-placeholder').style.display = 'none';
+        loadRemoteConfig();
+    } else {
+        document.getElementById('board-config').style.display = 'none';
+        document.getElementById('board-placeholder').style.display = 'block';
+    }
+}
+
+/* ================================================================
+   IP Octet Helpers
+   ================================================================ */
+
+/* Combine 4 octets into an IP string (e.g. "192.168.8.111") */
+function getIP(prefix) {
+    var parts = [];
+    for (var i = 0; i < 4; i++) {
+        var el = document.getElementById(prefix + '-o' + i);
+        var v = el ? el.value.trim() : '';
+        parts.push(v || '0');
+    }
+    return parts.join('.');
+}
+
+/* Split an IP string into 4 octet inputs */
+function setIP(prefix, ipStr) {
+    var parts = (ipStr || '').split('.');
+    for (var i = 0; i < 4; i++) {
+        var el = document.getElementById(prefix + '-o' + i);
+        if (el) el.value = parts[i] || '';
+    }
+}
+
+/* ================================================================
+   Octet Auto-Tab: jump to next after 3 digits, backspace on empty
+   ================================================================ */
+function setupOctetHandlers() {
+    var allOctets = document.querySelectorAll('.ip-octet');
+    for (var i = 0; i < allOctets.length; i++) {
+        allOctets[i].addEventListener('input', function(e) {
+            var el = e.target;
+            var v = el.value.replace(/[^0-9]/g, '');
+            el.value = v;
+            if (v.length >= 3) {
+                /* Jump to next octet in same ip-segments group */
+                var container = el.closest('.ip-segments');
+                if (container) {
+                    var octets = container.querySelectorAll('.ip-octet');
+                    for (var j = 0; j < octets.length - 1; j++) {
+                        if (octets[j] === el && octets[j + 1]) {
+                            octets[j + 1].focus();
+                            octets[j + 1].select();
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        allOctets[i].addEventListener('keydown', function(e) {
+            var el = e.target;
+            if (e.key === 'Backspace' && el.value === '' && el.selectionStart === 0) {
+                /* Jump to previous octet in the same group */
+                var container = el.closest('.ip-segments');
+                if (container) {
+                    var octets = container.querySelectorAll('.ip-octet');
+                    for (var j = 1; j < octets.length; j++) {
+                        if (octets[j] === el && octets[j - 1]) {
+                            octets[j - 1].focus();
+                            e.preventDefault();
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+        /* Allow dot key to jump to next octet (like many IP input UIs) */
+        allOctets[i].addEventListener('keypress', function(e) {
+            if (e.key === '.') {
+                e.preventDefault();
+                var el = e.target;
+                var container = el.closest('.ip-segments');
+                if (container) {
+                    var octets = container.querySelectorAll('.ip-octet');
+                    for (var j = 0; j < octets.length - 1; j++) {
+                        if (octets[j] === el && octets[j + 1]) {
+                            octets[j + 1].focus();
+                            octets[j + 1].select();
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+    }
+}
+
+/* ================================================================
+   Remote Config — Load / Save
+   ================================================================ */
+
+function loadRemoteConfig() {
+    setStatus('查询中...', 'info');
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/cgi-bin/network.cgi?action=get', true);
+    xhr.onload = function() {
+        if (xhr.status == 200) {
+            try {
+                var r = JSON.parse(xhr.responseText);
+                if (r.status == 'ok') {
+                    setIP('ip', r.ipv4.ip);
+                    setIP('mask', r.ipv4.mask);
+                    setIP('gw', r.ipv4.gateway);
+                    document.getElementById('remote-ipv6').value = r.ipv6 || '';
+                    setStatus('已获取配置', 'success');
+                } else {
+                    setStatus('错误: ' + r.message, 'error');
+                }
+            } catch(e) { setStatus('解析失败', 'error'); }
+        } else { setStatus('查询失败', 'error'); }
+    };
+    xhr.onerror = function() { setStatus('网络错误', 'error'); };
+    xhr.send();
+}
+
+function refreshRemoteConfig() { loadRemoteConfig(); }
+
+function saveIPv4() {
+    var ip = getIP('ip');
+    var mask = getIP('mask');
+    var gw = getIP('gw');
+    var v6 = document.getElementById('remote-ipv6').value.trim();
+
+    /* Validate */
+    if (!ip || ip === '0.0.0.0') {
+        setStatus('请输入有效的 IP 地址', 'error');
+        return;
+    }
+
+    setStatus('保存中...', 'info');
+    var params = 'ip=' + encodeURIComponent(ip) +
+                 '&mask=' + encodeURIComponent(mask) +
+                 '&gateway=' + encodeURIComponent(gw) +
+                 '&ipv6=' + encodeURIComponent(v6) +
+                 '&csrf_token=' + encodeURIComponent(getCSRF());
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/cgi-bin/network.cgi?action=set', true);
+    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+    xhr.onload = function() {
+        if (xhr.status == 200) {
+            try {
+                var r = JSON.parse(xhr.responseText);
+                if (r.status == 'ok') {
+                    setStatus('保存成功，正在刷新...', 'success');
+                    loadRemoteConfig();
+                } else {
+                    setStatus('错误: ' + r.message, 'error');
+                }
+            } catch(e) { setStatus('解析失败', 'error'); }
+        } else { setStatus('保存失败', 'error'); }
+    };
+    xhr.onerror = function() { setStatus('网络错误', 'error'); };
+    xhr.send(params);
+}
+
+function saveIPv6() {
+    /* Collect current IPv4 values to include them (CGI requires them) */
+    var ip = getIP('ip');
+    var mask = getIP('mask');
+    var gw = getIP('gw');
+    var v6 = document.getElementById('remote-ipv6').value.trim();
+
+    if (!v6) {
+        setStatus('请输入 IPv6 地址', 'error');
+        return;
+    }
+
+    setStatus('保存中...', 'info');
+    var params = 'ip=' + encodeURIComponent(ip) +
+                 '&mask=' + encodeURIComponent(mask) +
+                 '&gateway=' + encodeURIComponent(gw) +
+                 '&ipv6=' + encodeURIComponent(v6) +
+                 '&csrf_token=' + encodeURIComponent(getCSRF());
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/cgi-bin/network.cgi?action=set', true);
+    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+    xhr.onload = function() {
+        if (xhr.status == 200) {
+            try {
+                var r = JSON.parse(xhr.responseText);
+                if (r.status == 'ok') {
+                    setStatus('IPv6 保存成功', 'success');
+                    loadRemoteConfig();
+                } else {
+                    setStatus('错误: ' + r.message, 'error');
+                }
+            } catch(e) { setStatus('解析失败', 'error'); }
+        } else { setStatus('保存失败', 'error'); }
+    };
+    xhr.onerror = function() { setStatus('网络错误', 'error'); };
+    xhr.send(params);
+}
+
+function setStatus(msg, type) {
+    var el = document.getElementById('remote-status');
+    el.textContent = msg;
+    el.className = 'status-msg status-' + type;
+}
+
+/* ================================================================
+   Initialize
+   ================================================================ */
+setupOctetHandlers();
+</script>
+
+</body>
+</html>
