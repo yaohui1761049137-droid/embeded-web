@@ -696,3 +696,98 @@ button#sendBtn:disabled {
     color: #5088b0;
     background: rgba(80, 136, 176, 0.08);
 }
+
+/* ============================================
+   USER MANAGEMENT — table & actions
+   ============================================ */
+
+.user-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+
+.user-table thead th {
+    background: #f1edf4;
+    color: #3d3d4a;
+    font-weight: 600;
+    padding: 0.7rem 0.8rem;
+    text-align: left;
+    border-bottom: 1px solid #e0dce8;
+    white-space: nowrap;
+}
+
+.user-table thead th:last-child {
+    text-align: center;
+}
+
+.user-table tbody td {
+    padding: 0.65rem 0.8rem;
+    border-bottom: 1px solid #f0f0f3;
+    color: #3d3d4a;
+    vertical-align: middle;
+}
+
+.user-table tbody tr:hover {
+    background: rgba(196, 181, 208, 0.06);
+}
+
+.user-table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+.user-enabled {
+    color: #4a8a5a;
+    font-weight: 500;
+}
+
+.user-disabled {
+    color: #c45050;
+    font-weight: 500;
+}
+
+.user-time {
+    font-size: 0.82rem;
+    color: #8a8a9a;
+    white-space: nowrap;
+}
+
+.user-actions {
+    text-align: center;
+    white-space: nowrap;
+}
+
+.user-action-na {
+    color: #c8c8d4;
+    font-size: 0.85rem;
+    padding: 0 0.25rem;
+}
+
+.btn-action {
+    padding: 0.35rem 0.7rem;
+    border: 1px solid #d4d4d8;
+    border-radius: 5px;
+    font-family: inherit;
+    font-size: 0.8rem;
+    font-weight: 500;
+    color: #3d3d4a;
+    background: #fafafe;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+    white-space: nowrap;
+}
+
+.btn-action:hover {
+    border-color: #b5a6c2;
+    background: #ffffff;
+}
+
+.btn-action-danger {
+    color: #c45050;
+    border-color: #e8c8c8;
+}
+
+.btn-action-danger:hover {
+    border-color: #c45050;
+    background: #fdf5f5;
+}

@@ -14,8 +14,7 @@
 /* Redirect if no session cookie — prevents direct URL access bypassing login */
 /* Helper: read CSRF token from cookie (not HttpOnly, JS-readable) */
 function getCSRF() {
-    var m = document.cookie.match(/csrf_token=([^;]+)/);
-    return m ? m[1] : '';
+    return (window._currentUser && window._currentUser.csrf) || '';
 }
 if (!document.cookie.match(/csrf_token=/)) {
     window.location.href = '/index.html';
@@ -34,8 +33,8 @@ if (!document.cookie.match(/csrf_token=/)) {
 <a data-tab="monitor" onclick="switchTab('monitor')">服务监控及报警</a>
 <a data-tab="timesync" onclick="switchTab('timesync')">时间服务校验设置</a>
 <a data-tab="redundancy" onclick="switchTab('redundancy')">主备协同配置</a>
-</div>
-<div class="nav-right"><a href="/cgi-bin/logout.cgi" class="logout-link">退出</a></div>
+	<a data-tab="usermgr" onclick="switchTab('usermgr');loadUserList()" id="nav-usermgr" style="display:none">用户管理</a>
+	</div>
 </nav>
 
 <!-- Main content area -->
@@ -176,6 +175,56 @@ if (!document.cookie.match(/csrf_token=/)) {
 <h2>主备协同配置</h2>
 <p class="placeholder-text">开发中...</p>
 </div>
+	<!-- Tab 7: 用户管理 -->
+	<div id="tab-usermgr" class="tab-content">
+	<h2>用户管理</h2>
+
+	<div class="config-panel">
+	<div class="panel-header">创建新用户</div>
+	<div class="panel-body">
+	<table class="config-table">
+	<tr>
+	<td class="config-label">用户名</td>
+	<td class="config-value">
+	<input type="text" id="new-user-name" class="input-full" placeholder="3-32 个字符" maxlength="32" autocomplete="off">
+	</td>
+	</tr>
+	<tr>
+	<td class="config-label">密码</td>
+	<td class="config-value">
+	<input type="password" id="new-user-pass" class="input-full" placeholder="6-64 个字符" maxlength="64" autocomplete="off">
+	</td>
+	</tr>
+	</table>
+	<div class="panel-actions">
+	<button class="btn-set" onclick="createUser()">创建用户</button>
+	</div>
+	</div>
+	</div>
+
+	<div class="config-panel">
+	<div class="panel-header">用户列表</div>
+	<div class="panel-body" style="padding:0">
+	<table class="user-table" id="user-table">
+	<thead>
+	<tr>
+	<th>ID</th>
+	<th>用户名</th>
+	<th>角色</th>
+	<th>状态</th>
+	<th>最后登录</th>
+	<th>操作</th>
+	</tr>
+	</thead>
+	<tbody id="user-list-body">
+	<tr><td colspan="6" class="placeholder-text" style="padding:2rem">加载中...</td></tr>
+	</tbody>
+	</table>
+	</div>
+	</div>
+
+	<span id="usermgr-status"></span>
+	</div>
 
 </div><!-- end main-content -->
 </div><!-- end app-layout -->
@@ -445,9 +494,276 @@ function setStatus(msg, type) {
     el.className = 'status-msg status-' + type;
 }
 
+// ================================================================
+//   Initialize
+
 /* ================================================================
-   Initialize
+   User Management — root only (Tab 7)
    ================================================================ */
+
+/* Show/hide user management nav link based on role */
+(function() {
+    if (window._currentUser && window._currentUser.role === 'root') {
+        var el = document.getElementById('nav-usermgr');
+        if (el) el.style.display = '';
+    }
+})();
+
+function loadUserList() {
+    var tbody = document.getElementById('user-list-body');
+    var status = document.getElementById('usermgr-status');
+    status.textContent = '加载中...';
+    status.className = 'status-msg status-info';
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/cgi-bin/user_list.cgi', true);
+    xhr.onload = function() {
+        if (xhr.status == 200) {
+            try {
+                var r = JSON.parse(xhr.responseText);
+                if (r.status == 'ok') {
+                    renderUserTable(r.users);
+                    status.textContent = '';
+                    status.className = '';
+                } else {
+                    tbody.innerHTML = '<tr><td colspan="6" class="placeholder-text" style="padding:2rem">加载失败</td></tr>';
+                    status.textContent = '错误: ' + r.message;
+                    status.className = 'status-msg status-error';
+                }
+            } catch(e) {
+                tbody.innerHTML = '<tr><td colspan="6" class="placeholder-text" style="padding:2rem">解析失败</td></tr>';
+                status.textContent = '解析失败';
+                status.className = 'status-msg status-error';
+            }
+        } else {
+            tbody.innerHTML = '<tr><td colspan="6" class="placeholder-text" style="padding:2rem">请求失败</td></tr>';
+            status.textContent = '请求失败';
+            status.className = 'status-msg status-error';
+        }
+    };
+    xhr.onerror = function() {
+        tbody.innerHTML = '<tr><td colspan="6" class="placeholder-text" style="padding:2rem">网络错误</td></tr>';
+        status.textContent = '网络错误';
+        status.className = 'status-msg status-error';
+    };
+    xhr.send();
+}
+
+function renderUserTable(users) {
+    var tbody = document.getElementById('user-list-body');
+    if (!users || users.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="placeholder-text" style="padding:2rem">暂无用户</td></tr>';
+        return;
+    }
+
+    var html = '';
+    for (var i = 0; i < users.length; i++) {
+        var u = users[i];
+        var roleLabel = (u.role === 'root') ? '超级管理员' : '管理员';
+        var enabledLabel = u.enabled ? '启用' : '禁用';
+        var enabledClass = u.enabled ? 'user-enabled' : 'user-disabled';
+        var lastLogin = u.last_login_at > 0 ? formatTime(u.last_login_at) : '从未登录';
+        var isSelf = (window._currentUser && u.id === window._currentUser.id);
+
+        html += '<tr>';
+        html += '<td>' + u.id + '</td>';
+        html += '<td>' + escapeHtml(u.username) + '</td>';
+        html += '<td>' + roleLabel + '</td>';
+        html += '<td class="' + enabledClass + '">' + enabledLabel + '</td>';
+        html += '<td class="user-time">' + lastLogin + '</td>';
+        html += '<td class="user-actions">';
+
+        /* Toggle enable/disable (can't disable self) */
+        if (!isSelf && u.role !== 'root' && window._currentUser && window._currentUser.role === 'root') {
+            var newState = u.enabled ? 0 : 1;
+            var actionLabel = u.enabled ? '禁用' : '启用';
+            html += '<button class="btn-action" onclick="toggleUser(' + u.id + ',' + newState + ')">' + actionLabel + '</button> ';
+        }
+        if (u.role === 'root' && isSelf) {
+            html += '<span class="user-action-na">—</span> ';
+        }
+
+        /* Reset password (can do for anyone) */
+        if (!isSelf) {
+            html += '<button class="btn-action" onclick="resetPassword(' + u.id + ')">重置密码</button> ';
+        } else {
+            html += '<span class="user-action-na">—</span> ';
+        }
+
+        /* Delete (can't delete root, can't delete self) */
+        if (!isSelf && u.role !== 'root') {
+            html += '<button class="btn-action btn-action-danger" onclick="deleteUser(' + u.id + ',\'' + escapeHtml(u.username) + '\')">删除</button>';
+        } else {
+            html += '<span class="user-action-na">—</span>';
+        }
+
+        html += '</td>';
+        html += '</tr>';
+    }
+    tbody.innerHTML = html;
+}
+
+function formatTime(ts) {
+    var d = new Date(ts * 1000);
+    var pad = function(n) { return n < 10 ? '0' + n : n; };
+    return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) +
+           ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+
+function escapeHtml(s) {
+    if (!s) return '';
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function setUserStatus(msg, type) {
+    var el = document.getElementById('usermgr-status');
+    el.textContent = msg;
+    el.className = 'status-msg status-' + type;
+}
+
+/* ── Create User ──────────────────────────────────────────── */
+function createUser() {
+    var user = document.getElementById('new-user-name').value.trim();
+    var pass = document.getElementById('new-user-pass').value;
+
+    if (!user || user.length < 3) {
+        setUserStatus('用户名至少 3 个字符', 'error');
+        return;
+    }
+    if (!pass || pass.length < 6) {
+        setUserStatus('密码至少 6 个字符', 'error');
+        return;
+    }
+
+    setUserStatus('创建中...', 'info');
+
+    var params = 'username=' + encodeURIComponent(user) +
+                 '&password=' + encodeURIComponent(pass) +
+                 '&csrf_token=' + encodeURIComponent(getCSRF());
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/cgi-bin/user_create.cgi', true);
+    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+    xhr.onload = function() {
+        if (xhr.status == 200) {
+            try {
+                var r = JSON.parse(xhr.responseText);
+                if (r.status == 'ok') {
+                    document.getElementById('new-user-name').value = '';
+                    document.getElementById('new-user-pass').value = '';
+                    setUserStatus('用户创建成功', 'success');
+                    loadUserList();
+                } else {
+                    setUserStatus('创建失败: ' + r.message, 'error');
+                }
+            } catch(e) { setUserStatus('解析失败', 'error'); }
+        } else { setUserStatus('请求失败', 'error'); }
+    };
+    xhr.onerror = function() { setUserStatus('网络错误', 'error'); };
+    xhr.send(params);
+}
+
+/* ── Toggle User ──────────────────────────────────────────── */
+function toggleUser(id, enabled) {
+    var label = enabled ? '启用' : '禁用';
+    if (!confirm('确认' + label + '该用户？')) return;
+
+    setUserStatus('处理中...', 'info');
+
+    var params = 'user_id=' + id +
+                 '&enabled=' + enabled +
+                 '&csrf_token=' + encodeURIComponent(getCSRF());
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/cgi-bin/user_toggle.cgi', true);
+    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+    xhr.onload = function() {
+        if (xhr.status == 200) {
+            try {
+                var r = JSON.parse(xhr.responseText);
+                if (r.status == 'ok') {
+                    setUserStatus('操作成功', 'success');
+                    loadUserList();
+                } else {
+                    setUserStatus('操作失败: ' + r.message, 'error');
+                }
+            } catch(e) { setUserStatus('解析失败', 'error'); }
+        } else { setUserStatus('请求失败', 'error'); }
+    };
+    xhr.onerror = function() { setUserStatus('网络错误', 'error'); };
+    xhr.send(params);
+}
+
+/* ── Reset Password ───────────────────────────────────────── */
+function resetPassword(id) {
+    var newPass = prompt('请输入新密码（6-64 个字符）：');
+    if (!newPass) return;
+    if (newPass.length < 6) {
+        setUserStatus('密码至少 6 个字符', 'error');
+        return;
+    }
+    if (newPass.length > 64) {
+        setUserStatus('密码最长 64 个字符', 'error');
+        return;
+    }
+
+    setUserStatus('重置中...', 'info');
+
+    var params = 'user_id=' + id +
+                 '&password=' + encodeURIComponent(newPass) +
+                 '&csrf_token=' + encodeURIComponent(getCSRF());
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/cgi-bin/user_passwd.cgi', true);
+    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+    xhr.onload = function() {
+        if (xhr.status == 200) {
+            try {
+                var r = JSON.parse(xhr.responseText);
+                if (r.status == 'ok') {
+                    setUserStatus('密码已重置', 'success');
+                    loadUserList();
+                } else {
+                    setUserStatus('重置失败: ' + r.message, 'error');
+                }
+            } catch(e) { setUserStatus('解析失败', 'error'); }
+        } else { setUserStatus('请求失败', 'error'); }
+    };
+    xhr.onerror = function() { setUserStatus('网络错误', 'error'); };
+    xhr.send(params);
+}
+
+/* ── Delete User ──────────────────────────────────────────── */
+function deleteUser(id, username) {
+    if (!confirm('确认删除用户 "' + username + '"？此操作不可恢复！')) return;
+    if (!confirm('再次确认：删除用户 "' + username + '"？')) return;
+
+    setUserStatus('删除中...', 'info');
+
+    var params = 'user_id=' + id +
+                 '&csrf_token=' + encodeURIComponent(getCSRF());
+
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/cgi-bin/user_delete.cgi', true);
+    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+    xhr.onload = function() {
+        if (xhr.status == 200) {
+            try {
+                var r = JSON.parse(xhr.responseText);
+                if (r.status == 'ok') {
+                    setUserStatus('用户已删除', 'success');
+                    loadUserList();
+                } else {
+                    setUserStatus('删除失败: ' + r.message, 'error');
+                }
+            } catch(e) { setUserStatus('解析失败', 'error'); }
+        } else { setUserStatus('请求失败', 'error'); }
+    };
+    xhr.onerror = function() { setUserStatus('网络错误', 'error'); };
+    xhr.send(params);
+}
+// ===========================================================
 setupOctetHandlers();
 </script>
 

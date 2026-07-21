@@ -27,6 +27,10 @@ int main(void) {
 
     cgi_header("text/html; charset=utf-8");
 
+    /* Inject current user info for frontend JS */
+    printf("<script>window._currentUser={id:%d,username:\"%s\",role:\"%s\",csrf:\"%s\"};</script>\n",
+           session.user_id, session.username, session.role, session.csrf_token);
+
     FILE *fp = fopen("/home/www/control_panel.html", "r");
     if (!fp) {
         printf("<html><body><h2>Error</h2><p>Page template not found</p></body></html>");

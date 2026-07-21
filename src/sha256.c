@@ -83,8 +83,10 @@ void sha256_final(sha256_ctx *ctx, uint8_t digest[SHA256_DIGEST_SIZE]) {
     sha256_update(ctx, &pad, 1);
     while ((ctx->count % 64) != 56)
         sha256_update(ctx, (uint8_t*)&(uint8_t){0}, 1);
-    for (i = 0; i < 8; i++)
-        sha256_update(ctx, (uint8_t*)&((uint8_t)(bits >> (56 - i*8))), 1);
+    for (i = 0; i < 8; i++) {
+        uint8_t byte = (bits >> (56 - i*8)) & 0xff;
+        sha256_update(ctx, &byte, 1);
+    }
     for (i = 0; i < 8; i++) {
         digest[i*4]     = (ctx->state[i] >> 24) & 0xff;
         digest[i*4 + 1] = (ctx->state[i] >> 16) & 0xff;
