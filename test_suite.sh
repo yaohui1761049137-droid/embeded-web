@@ -132,12 +132,38 @@ RESP=$(curl -sk -b "$SID; $CSRF_COOKIE" \
     "https://$IP/cgi-bin/network.cgi?action=set" 2>&1)
 assert_status "Wrong CSRF rejected" "error" "$RESP"
 
-# ── Test 12: CSRF success (valid token) ─────────────────────────────
-echo "12. CSRF success (valid token)"
+# ── Test 12: CSRF success (valid token, Board 2 port=s4) ───────────────
+echo "12. CSRF success (Board 2, port=s4)"
 RESP=$(curl -sk -b "$SID; $CSRF_COOKIE" \
-    -d "ip=192.168.8.203&mask=255.255.255.0&gateway=192.168.8.1&ipv6=&csrf_token=$CSRF_VAL" \
-    "https://$IP/cgi-bin/network.cgi?action=set" 2>&1)
+    -d "ip=192.168.8.99&mask=255.255.255.0&gateway=192.168.8.1&ipv6=&csrf_token=$CSRF_VAL" \
+    "https://$IP/cgi-bin/network.cgi?action=set&port=s4" 2>&1)
 assert_status "Valid CSRF accepted" "ok" "$RESP"
+
+# ── Test 12b: Audit log recorded after network SET ───────────────────
+echo "12b. Audit log (network_set)"
+AUDIT_LOG=$(sshpass -p 'root' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$IP \
+    "python3 -c \"
+import sqlite3
+conn = sqlite3.connect('/var/db/myapp.db')
+conn.execute('PRAGMA wal_checkpoint(FULL)')
+cur = conn.cursor()
+cur.execute(\\\"SELECT COUNT(*) FROM audit_log WHERE action='network_set'\\\")
+print(cur.fetchone()[0])
+conn.close()
+\"" 2>/dev/null || echo "0")
+if [ "$AUDIT_LOG" -gt 0 ]; then
+    green "  ✅ Audit log recorded (count=$AUDIT_LOG)"
+    PASS=$((PASS + 1))
+else
+    red "  ❌ Audit log not found (sshpass + python3 required on board)"
+    FAIL=$((FAIL + 1))
+fi
+
+# ── Test 12c: Board 2 (port=s4) serial GET ────────────────────────────
+echo "12c. Board 2 (ttyS4) serial GET"
+RESP=$(curl -sk -b "$SID" "https://$IP/cgi-bin/network.cgi?action=get&port=s4" 2>&1)
+assert_status "Board 2 query OK" "ok" "$RESP"
+assert_contains "Board 2 IPv4 data" "ipv4" "$RESP"
 
 # ── Test 13: Root API ───────────────────────────────────────────────
 echo "13. Root API (user_list)"

@@ -72,12 +72,12 @@ static void json_escape(const char *src, char *dst, int max) {
 
 /* ── Actions ─────────────────────────────────────────────────────── */
 
-static int handle_get(void) {
+static int handle_get(const char *serial_dev, unsigned int baud) {
     char resp[RESP_BUF], err[128];
     char ip[64] = "", mask[64] = "", gateway[64] = "";
     char ipv6[128] = "";
 
-    int fd = serial_open(REMOTE_SERIAL_DEVICE, REMOTE_SERIAL_BAUD);
+    int fd = serial_open(serial_dev, baud);
     if (fd < 0) {
         cgi_header("application/json");
         printf("{\"status\":\"error\",\"message\":\"Cannot open serial port\"}");
@@ -99,7 +99,7 @@ static int handle_get(void) {
     return 0;
 }
 
-static int handle_set(void) {
+static int handle_set(const char *serial_dev, unsigned int baud) {
     char *ip      = get_post_param("ip");
     char *mask    = get_post_param("mask");
     char *gateway = get_post_param("gateway");
@@ -111,7 +111,7 @@ static int handle_set(void) {
         return 0;
     }
 
-    int fd = serial_open(REMOTE_SERIAL_DEVICE, REMOTE_SERIAL_BAUD);
+    int fd = serial_open(serial_dev, baud);
     if (fd < 0) {
         cgi_header("application/json");
         printf("{\"status\":\"error\",\"message\":\"Cannot open serial port\"}");
@@ -149,7 +149,7 @@ static int handle_set(void) {
         json_escape(err_summary, esc, sizeof(esc));
         printf("{\"status\":\"error\",\"message\":\"%s\"}", esc);
     }
-    return 0;
+    return all_ok ? 1 : 0;
 }
 
 /* ── Entry point ─────────────────────────────────────────────────── */
@@ -167,7 +167,7 @@ int main(void) {
         return 0;
     }
 
-    /* Parse action */
+    /* Parse action & port */
     const char *qs = get_env("QUERY_STRING");
     char action[16] = "";
     if (strncmp(qs, "action=", 7) == 0) {
@@ -177,9 +177,26 @@ int main(void) {
         action[i] = '\0';
     }
 
+    const char *serial_dev = REMOTE_SERIAL_DEVICE;  /* default ttyS7 */
+    unsigned int baud     = REMOTE_SERIAL_BAUD;     /* default 115200 */
+    {
+        const char *p = strstr(qs, "port=");
+        if (p) {
+            char port[8] = "";
+            int i;
+            for (i = 0; i < 7 && p[5+i] && p[5+i] != '&'; i++)
+                port[i] = p[5+i];
+            port[i] = '\0';
+            if (strcmp(port, "s4") == 0) {
+                serial_dev = REMOTE_SERIAL_DEVICE_2;
+                baud       = REMOTE_SERIAL_BAUD_2;
+            }
+        }
+    }
+
     if (strcmp(action, "get") == 0) {
         auth_cleanup();
-        return handle_get();
+        return handle_get(serial_dev, baud);
     }
 
     /* For "set": CSRF check FIRST (before POST params consumed by handle_set) */
@@ -191,8 +208,14 @@ int main(void) {
             auth_cleanup();
             return 0;
         }
+        int result = handle_set(serial_dev, baud);
+        if (result == 1) {
+            auth_audit_log(session.user_id, "network_set", session.user_id,
+                           "Remote Board network config modified via serial",
+                           getenv("REMOTE_ADDR"));
+        }
         auth_cleanup();
-        return handle_set();
+        return result;
     }
 
     cgi_header("application/json");

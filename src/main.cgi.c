@@ -23,7 +23,7 @@ int main(void) {
         return 0;
     }
 
-    auth_cleanup();
+    auth_cleanup();//断开数据库链接，省资源
 
     cgi_header("text/html; charset=utf-8");
 
