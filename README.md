@@ -2,7 +2,7 @@
 
 嵌入式 Web 管理系统，基于 **Lighttpd 1.4.59 + C CGI**，运行在 LubanCat ARM aarch64 开发板上。
 
-通过串口 (`/dev/ttyS7`) 与 Remote Board 通信，实现网络参数的远程查询和配置。
+通过串口连接多个 Remote Board，实现网络参数的远程查询和配置。支持双板独立管理。
 
 ## 功能
 
@@ -10,9 +10,11 @@
 - **多用户认证**（root / admin 角色，SHA-256 密码哈希，10 万轮迭代）
 - **Session + CSRF 双重防护**（HttpOnly Cookie + CSRF Token）
 - **串口通信**（termios2 / BOTHER 自定义波特率，PING 预热 + 重试）
+- **多 Board 支持**（Web 控制面板一键切换，独立配置互不干扰）
 - **用户管理 API**（root 可创建/启用/禁用/删除 admin 用户，含审计日志）
+- **业务审计日志**（网络配置修改自动记录操作者和时间到 `audit_log` 表）
 - **SQLite 存储**（WAL 模式，多进程 CGI 并发安全）
-- **31 项自动化测试**（`test_suite.sh`）
+- **34 项自动化测试**（`test_suite.sh`，含 Board 2 和审计日志验证）
 
 ## 架构
 
@@ -30,11 +32,21 @@
 └──────┬──────────────┘
        │
        ▼
-┌─────────────────────┐      Serial /dev/ttyS7     ┌──────────────────┐
-│  CGI Programs (C)   │  ───────────────────────→   │  Remote Board    │
-│  + auth.c (SQLite)  │  ←───────────────────────   │  handler.sh      │
-│  + common.c (串口)   │     115200 8N1              │  (Rockchip)      │
-└─────────────────────┘                              └──────────────────┘
+┌──────────────────────────┐      Serial /dev/ttyS7 (115200)  ┌──────────────────┐
+│  CGI Programs (C)         │  ──────────────────────────────→ │  Board 1          │
+│  + auth.c (SQLite/审计)    │  ←────────────────────────────── │  handler.sh       │
+│  + common.c (串口)         │                                  │  192.168.8.201    │
+│                           │      Serial /dev/ttyS4 (38400)    └──────────────────┘
+│  network.cgi ?port=s4 ────│  ──────────────────────────────→ ┌──────────────────┐
+│                           │  ←────────────────────────────── │  Board 2          │
+│  audit_log (业务操作)      │                                  │  handler.sh       │
+└──────────────────────────┘                                   │  192.168.8.99    │
+       │                                                        └──────────────────┘
+       ▼
+┌──────────────┐
+│   SQLite DB   │  ← users / sessions / audit_log
+│  /var/db/     │
+└──────────────┘
 ```
 
 ## 目录结构
@@ -63,9 +75,10 @@ embeded_Lighttpd/
 │   └── user_delete.cgi.c      [root] 删除用户
 ├── www/
 │   ├── index.html             登录页面
-│   ├── control_panel.html     控制面板（6 Tab）
+│   ├── control_panel.html     控制面板（7 Tab，含 Board 1/2 切换）
 │   └── style.css              全局样式
-└── test_suite.sh              31 项端到端测试
+├── handler.sh                 Remote Board 串口协议处理脚本
+└── test_suite.sh              34 项端到端测试
 ```
 
 ## 快速开始
@@ -174,7 +187,7 @@ Set-Cookie: csrf_token=<32 hex>; Path=/; Secure; SameSite=Lax; Max-Age=3600
 
 ## 串口协议
 
-通过 `/dev/ttyS7` (115200 8N1) 与 Remote Board 通信：
+与 Remote Board 通信的文本行协议（`\n` 结尾）：
 
 | 命令 | 方向 | 响应 |
 |------|------|------|
@@ -183,6 +196,32 @@ Set-Cookie: csrf_token=<32 hex>; Path=/; Secure; SameSite=Lax; Max-Age=3600
 | `REMOTE_SET_IPV4 <ip> <mask> <gw>` | → | `OK` |
 | `REMOTE_GET_IPV6` | → | `OK <addr/prefix>` |
 | `REMOTE_SET_IPV6 <addr/prefix>` | → | `OK` |
+
+## Board 配置
+
+| Board | IP | 串口 | 波特率 | CGI 参数 |
+|-------|-----|------|--------|----------|
+| Board 1 | 192.168.8.201 | `/dev/ttyS7` | 115200 | 默认（无 port 参数） |
+| Board 2 | 192.168.8.99 | `/dev/ttyS4` | 38400 | `port=s4` |
+
+Web 控制面板中 Board 1/2 各自拥有独立表单，切换时互不覆盖。Board 3/4 预留位置。
+
+## Remote Board 部署
+
+将 `handler.sh` 部署到 Remote Board 并修改顶部的 `DEV` 和 `BAUD`：
+
+```bash
+scp handler.sh root@<remote_ip>:/usr/local/bin/
+ssh root@<remote_ip> '
+  sed -i "s|DEV=/dev/ttyS7|DEV=/dev/ttyS4|" /usr/local/bin/handler.sh
+  sed -i "s|BAUD=115200|BAUD=38400|" /usr/local/bin/handler.sh
+  chmod +x /usr/local/bin/handler.sh
+  rm -f /var/run/serial_protocol.lock /var/run/serial_protocol.pid
+  nohup /usr/local/bin/handler.sh > /tmp/handler.log 2>&1 &
+'
+```
+
+handler.sh 特性：PID 清理、串口断开自动重连、flock 防重复启动。
 
 ## License
 
