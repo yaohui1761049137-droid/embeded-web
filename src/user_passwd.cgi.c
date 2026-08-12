@@ -18,6 +18,15 @@ int main(void) {
         return 0;
     }
 
+    /* ADR-0002: forced-change gate — expired password blocks everything
+     * except the change-password CGI */
+    if (!auth_require_password_current(&session)) {
+        cgi_header("application/json");
+        printf("{\"status\":\"error\",\"message\":\"密码已过期,请先修改密码\"}");
+        auth_cleanup();
+        return 0;
+    }
+
     if (!auth_require_role(&session, "root")) {
         cgi_header("application/json");
         printf("{\"status\":\"error\",\"message\":\"Forbidden\"}");
@@ -36,10 +45,18 @@ int main(void) {
     const char *target_id_str = get_post_param("user_id");
     const char *new_pass = get_post_param("password");
 
-    if (!target_id_str || !new_pass ||
-        strlen(new_pass) < 6 || strlen(new_pass) > 64) {
+    if (!target_id_str || !new_pass) {
         cgi_header("application/json");
         printf("{\"status\":\"error\",\"message\":\"Invalid parameters\"}");
+        auth_cleanup();
+        return 0;
+    }
+
+    /* ADR-0002: strong password policy enforced on reset */
+    char policy_err[128];
+    if (!auth_password_policy_ok(new_pass, policy_err, sizeof(policy_err))) {
+        cgi_header("application/json");
+        printf("{\"status\":\"error\",\"message\":\"%s\"}", policy_err);
         auth_cleanup();
         return 0;
     }
@@ -58,18 +75,22 @@ int main(void) {
     sqlite3_stmt *stmt;
     time_t now = time(NULL);
 
+    /* ADR-0002: reset restarts the 90-day timer; kick other sessions */
     const char *sql =
-        "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?";
+        "UPDATE users SET password_hash = ?, password_changed_at = ?, "
+        "updated_at = ? WHERE id = ?";
 
     int ok = 0;
     if (sqlite3_prepare_v2(mydb, sql, -1, &stmt, NULL) == SQLITE_OK) {
         sqlite3_bind_text (stmt, 1, hash, -1, SQLITE_STATIC);
         sqlite3_bind_int64(stmt, 2, (int64_t)now);
-        sqlite3_bind_int  (stmt, 3, target_id);
+        sqlite3_bind_int64(stmt, 3, (int64_t)now);
+        sqlite3_bind_int  (stmt, 4, target_id);
         ok = (sqlite3_step(stmt) == SQLITE_DONE)
           && (sqlite3_changes(mydb) > 0);
         sqlite3_finalize(stmt);
     }
+    if (ok) auth_kick_user_sessions(target_id, NULL);
 
     sqlite3_close(mydb);
 

@@ -56,6 +56,7 @@ int auth_init(const char *db_path) {
         "  id            INTEGER PRIMARY KEY AUTOINCREMENT,"
         "  username      TEXT    NOT NULL UNIQUE,"
         "  password_hash TEXT    NOT NULL,"
+        "  password_changed_at INTEGER NOT NULL DEFAULT 0,"
         "  role          TEXT    NOT NULL CHECK(role IN ('root','admin')),"
         "  enabled       INTEGER NOT NULL DEFAULT 1,"
         "  created_at    INTEGER NOT NULL,"
@@ -92,6 +93,12 @@ int auth_init(const char *db_path) {
         auth_cleanup();
         return -1;
     }
+
+    /* ADR-0002: auto-migrate legacy DBs — existing rows get 0, which
+     * marks them as expired → forced change on first login. */
+    sqlite3_exec(g_db,
+        "ALTER TABLE users ADD COLUMN password_changed_at INTEGER NOT NULL DEFAULT 0",
+        NULL, NULL, NULL);
 
     return 0;
 }
@@ -382,6 +389,101 @@ int auth_verify_password(const char *password, const char *stored_hash) {
     /* Compare with stored hash (the part after the last $) */
     const char *stored_digest = p + 1; /* skip the $ after salt */
     return (strcmp(hash_hex, stored_digest) == 0) ? 1 : 0;
+}
+
+/* ── Password policy (ADR-0002) ─────────────────────────────────── */
+
+int auth_password_policy_ok(const char *password, char *err, int err_max) {
+    int len, i;
+    int has_upper = 0, has_lower = 0, has_digit = 0, has_punct = 0;
+
+    if (!password) return 0;
+    len = strlen(password);
+
+    if (len < PASSWORD_MIN_LEN || len > PASSWORD_MAX_LEN) {
+        if (err) snprintf(err, err_max, "密码长度需为 %d-%d 个字符",
+                          PASSWORD_MIN_LEN, PASSWORD_MAX_LEN);
+        return 0;
+    }
+
+    for (i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)password[i];
+        if (c < 0x21 || c > 0x7E) {   /* control chars, space, non-ASCII */
+            if (err) snprintf(err, err_max,
+                              "密码只能包含 ASCII 可见字符(不允许中文、空格)");
+            return 0;
+        }
+        if (c >= 'A' && c <= 'Z')      has_upper = 1;
+        else if (c >= 'a' && c <= 'z') has_lower = 1;
+        else if (c >= '0' && c <= '9') has_digit = 1;
+        else                           has_punct = 1;  /* ASCII punct 0x21-0x7E */
+    }
+
+    if (!has_upper || !has_lower || !has_digit || !has_punct) {
+        if (err) snprintf(err, err_max,
+                          "密码需包含大写字母、小写字母、数字和特殊符号");
+        return 0;
+    }
+    return 1;
+}
+
+/* Read users.password_changed_at; returns 1 if found, 0 otherwise. */
+static int auth_user_password_changed_at(int user_id, int64_t *out) {
+    sqlite3_stmt *stmt;
+
+    if (!g_db || user_id <= 0) return 0;
+
+    if (sqlite3_prepare_v2(g_db,
+            "SELECT password_changed_at FROM users WHERE id = ?",
+            -1, &stmt, NULL) != SQLITE_OK)
+        return 0;
+
+    sqlite3_bind_int(stmt, 1, user_id);
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        *out = sqlite3_column_int64(stmt, 0);
+        sqlite3_finalize(stmt);
+        return 1;
+    }
+    sqlite3_finalize(stmt);
+    return 0;
+}
+
+int auth_user_must_change_password(int user_id) {
+    int64_t changed_at;
+    if (!auth_user_password_changed_at(user_id, &changed_at)) return 0;
+    if (changed_at == 0) return 1;                     /* legacy account */
+    return (time(NULL) - changed_at >=
+            (int64_t)PASSWORD_EXPIRE_DAYS * 86400LL) ? 1 : 0;
+}
+
+int auth_user_days_left(int user_id) {
+    int64_t changed_at, days;
+    if (!auth_user_password_changed_at(user_id, &changed_at)) return -1;
+    if (changed_at == 0) return 0;
+    days = ((int64_t)PASSWORD_EXPIRE_DAYS * 86400LL
+            - (time(NULL) - changed_at)) / 86400;
+    return days < 0 ? 0 : (int)days;
+}
+
+int auth_require_password_current(const SessionInfo *s) {
+    if (!s) return 0;
+    return auth_user_must_change_password(s->user_id) ? 0 : 1;
+}
+
+void auth_kick_user_sessions(int user_id, const char *keep_sid) {
+    sqlite3_stmt *stmt;
+    if (!g_db || user_id <= 0) return;
+
+    const char *sql = keep_sid
+        ? "DELETE FROM sessions WHERE user_id = ? AND sid != ?"
+        : "DELETE FROM sessions WHERE user_id = ?";
+
+    if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, user_id);
+        if (keep_sid) sqlite3_bind_text(stmt, 2, keep_sid, -1, SQLITE_STATIC);
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+    }
 }
 
 /* ── User login ──────────────────────────────────────────────────── */

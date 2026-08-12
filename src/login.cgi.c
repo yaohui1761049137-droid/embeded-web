@@ -18,7 +18,11 @@ int main(void) {
         const char *sid = get_cookie(SESSION_COOKIE_NAME);
         SessionInfo session;
         if (sid && auth_session_verify(sid, &session)) {
-            cgi_redirect("/cgi-bin/main.cgi");
+            /* ADR-0002: forced change before anything else */
+            if (auth_user_must_change_password(session.user_id))
+                cgi_redirect("/change.html");
+            else
+                cgi_redirect("/cgi-bin/main.cgi");
         } else {
             cgi_redirect("/index.html");
         }
@@ -57,6 +61,10 @@ int main(void) {
         return 0;
     }
 
+    /* ADR-0002: password expired/never set → forced change first */
+    const char *dest = auth_user_must_change_password(user_id)
+        ? "/change.html" : "/cgi-bin/main.cgi";
+
     /* Dual cookies: session_id=HttpOnly, csrf_token=JS-readable */
     printf("Status: 302\r\n");
     printf("Set-Cookie: %s=%s; Path=/; HttpOnly; Secure; "
@@ -65,7 +73,7 @@ int main(void) {
     printf("Set-Cookie: csrf_token=%s; Path=/; Secure; "
            "SameSite=Lax; Max-Age=%d\r\n",
            csrf, SESSION_EXPIRE);
-    printf("Location: /cgi-bin/main.cgi\r\n\r\n");
+    printf("Location: %s\r\n\r\n", dest);
 
     auth_cleanup();
     return 0;

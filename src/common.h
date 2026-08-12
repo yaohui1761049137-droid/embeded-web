@@ -34,11 +34,22 @@ char *get_cookie(const char *name);
 #define REMOTE_SERIAL_DEVICE   "/dev/ttyS7"
 #define REMOTE_SERIAL_DEVICE_2 "/dev/ttyS4"
 #define REMOTE_SERIAL_BAUD     115200
-#define REMOTE_SERIAL_BAUD_2   38400
+#define REMOTE_SERIAL_BAUD_2   115200
+
+/* ── Local channel (ADR-0001: LubanCat 自身即 Board 1) ──────────────
+ * network.cgi 不带 port= 参数时走本地模式:命令写入 cmd FIFO,
+ * 由 root 运行的 handler-local.sh 读取并执行 nmcli,响应写回 resp FIFO。
+ * 双 FIFO 避免 handler 读到自己的回显(O_RDWR 单 FIFO 会自回显)。 */
+#define LOCAL_FIFO_PATH   "/run/serial_protocol.fifo"
+#define LOCAL_RESP_FIFO   "/run/serial_protocol.resp"
 
 int  serial_open(const char *device, unsigned int baudrate);
 int  serial_send(int fd, const char *data, int len);
 void serial_close(int fd);
+
+int  fifo_open(const char *cmd_path, const char *resp_path);
+void fifo_close(int fd);
+int  fifo_read_line(int fd, char *buf, int max_len, int timeout_ms);
 
 /* Read one line (until \n) from serial fd with timeout_ms.
  * Returns bytes read (without \n/\r), 0 on timeout, -1 on error.

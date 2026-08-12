@@ -23,13 +23,25 @@ int main(void) {
         return 0;
     }
 
+    /* ADR-0002: forced-change gate — expired password is redirected to
+     * the change page instead of the control panel */
+    if (auth_user_must_change_password(session.user_id)) {
+        auth_cleanup();
+        cgi_redirect("/change.html");
+        return 0;
+    }
+
+    /* Days left until password expiry (ADR-0002 warning banner) */
+    int days_left = auth_user_days_left(session.user_id);
+
     auth_cleanup();//断开数据库链接，省资源
 
     cgi_header("text/html; charset=utf-8");
 
     /* Inject current user info for frontend JS */
-    printf("<script>window._currentUser={id:%d,username:\"%s\",role:\"%s\",csrf:\"%s\"};</script>\n",
-           session.user_id, session.username, session.role, session.csrf_token);
+    printf("<script>window._currentUser={id:%d,username:\"%s\",role:\"%s\",csrf:\"%s\",daysLeft:%d};</script>\n",
+           session.user_id, session.username, session.role, session.csrf_token,
+           days_left);
 
     FILE *fp = fopen("/home/www/control_panel.html", "r");
     if (!fp) {

@@ -18,6 +18,15 @@ int main(void) {
         return 0;
     }
 
+    /* ADR-0002: forced-change gate — expired password blocks everything
+     * except the change-password CGI */
+    if (!auth_require_password_current(&session)) {
+        cgi_header("application/json");
+        printf("{\"status\":\"error\",\"message\":\"密码已过期,请先修改密码\"}");
+        auth_cleanup();
+        return 0;
+    }
+
     if (!auth_require_role(&session, "root")) {
         cgi_header("application/json");
         printf("{\"status\":\"error\",\"message\":\"Forbidden\"}");
@@ -37,11 +46,18 @@ int main(void) {
     const char *new_user = get_post_param("username");
     const char *new_pass = get_post_param("password");
 
-    if (!new_user || strlen(new_user) < 3 || strlen(new_user) > 32 ||
-        !new_pass || strlen(new_pass) < 6 || strlen(new_pass) > 64) {
+    if (!new_user || strlen(new_user) < 3 || strlen(new_user) > 32) {
         cgi_header("application/json");
-        printf("{\"status\":\"error\",\"message\":\"Invalid parameters "
-               "(username: 3-32 chars, password: 6-64 chars)\"}");
+        printf("{\"status\":\"error\",\"message\":\"Invalid username (3-32 chars)\"}");
+        auth_cleanup();
+        return 0;
+    }
+
+    /* ADR-0002: strong password policy enforced on create */
+    char policy_err[128];
+    if (!auth_password_policy_ok(new_pass, policy_err, sizeof(policy_err))) {
+        cgi_header("application/json");
+        printf("{\"status\":\"error\",\"message\":\"%s\"}", policy_err);
         auth_cleanup();
         return 0;
     }
@@ -62,16 +78,18 @@ int main(void) {
     time_t now = time(NULL);
 
     const char *sql =
-        "INSERT INTO users (username, password_hash, role, enabled, "
-        "created_at, updated_at, created_by) VALUES (?, ?, 'admin', 1, ?, ?, ?)";
+        "INSERT INTO users (username, password_hash, password_changed_at, "
+        "role, enabled, created_at, updated_at, created_by) "
+        "VALUES (?, ?, ?, 'admin', 1, ?, ?, ?)";
 
     int ok = 0;
     if (sqlite3_prepare_v2(mydb, sql, -1, &stmt, NULL) == SQLITE_OK) {
         sqlite3_bind_text (stmt, 1, new_user, -1, SQLITE_STATIC);
         sqlite3_bind_text (stmt, 2, hash,     -1, SQLITE_STATIC);
-        sqlite3_bind_int64(stmt, 3, (int64_t)now);
+        sqlite3_bind_int64(stmt, 3, (int64_t)now);   /* password_changed_at */
         sqlite3_bind_int64(stmt, 4, (int64_t)now);
-        sqlite3_bind_int  (stmt, 5, session.user_id);
+        sqlite3_bind_int64(stmt, 5, (int64_t)now);
+        sqlite3_bind_int  (stmt, 6, session.user_id);
         ok = (sqlite3_step(stmt) == SQLITE_DONE);
         sqlite3_finalize(stmt);
     }

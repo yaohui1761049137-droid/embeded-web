@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>修改密码 - Zynq Web Control</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;1,400&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/style.css">
+<style>
+/* ADR-0002: change-password page layout */
+.change-card { max-width: 420px; margin: 6rem auto; padding: 2rem;
+               background: #fff; border: 1px solid #e4e4e8; border-radius: 10px;
+               box-shadow: 0 4px 20px rgba(0,0,0,0.06); }
+.change-card h1 { margin: 0 0 0.4rem; font-size: 1.4rem; }
+.change-card .sub { color: #888; font-size: 0.85rem; margin-bottom: 1.5rem; }
+.change-card .field-group { margin-bottom: 1rem; }
+.change-card label { display: block; font-size: 0.85rem; color: #555; margin-bottom: 0.3rem; }
+.change-card input[type=password] { width: 100%; box-sizing: border-box; padding: 0.6rem 0.8rem;
+                                    border: 1px solid #d4d4d8; border-radius: 6px; font-size: 0.95rem; }
+.change-card input:focus { outline: none; border-color: #b5a6c2; }
+.change-card .hint { font-size: 0.78rem; color: #999; margin-top: 0.3rem; }
+.change-card .status-msg { margin-top: 1rem; }
+#btn-change { width: 100%; margin-top: 0.5rem; }
+</style>
+</head>
+<body>
+<script>
+/* Redirect to login if no session cookie (mirror of control_panel.html) */
+if (!document.cookie.match(/csrf_token=/)) {
+    window.location.href = '/index.html';
+}
+
+function getCSRF() {
+    var m = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/);
+    return m ? decodeURIComponent(m[1]) : '';
+}
+
+/* ADR-0002: client-side pre-check (UX only — backend enforces) */
+function policyError(pw) {
+    if (!pw) return '请输入新密码';
+    if (pw.length < 10 || pw.length > 64) return '密码长度需为 10-64 个字符';
+    if (/[^ -~]/.test(pw)) return '密码只能包含 ASCII 可见字符(不允许中文、空格)';
+    if (!/[A-Z]/.test(pw)) return '密码需包含大写字母';
+    if (!/[a-z]/.test(pw)) return '密码需包含小写字母';
+    if (!/[0-9]/.test(pw)) return '密码需包含数字';
+    if (!/[^A-Za-z0-9]/.test(pw)) return '密码需包含特殊符号';
+    return '';
+}
+
+function setMsg(msg, type) {
+    var el = document.getElementById('status');
+    el.textContent = msg;
+    el.className = 'status-msg status-' + (type || 'info');
+}
+
+function submitChange() {
+    var oldPw = document.getElementById('old_password').value;
+    var newPw = document.getElementById('new_password').value;
+    var confirmPw = document.getElementById('confirm_password').value;
+
+    var err = policyError(newPw);
+    if (err) { setMsg(err, 'error'); return; }
+    if (newPw !== confirmPw) { setMsg('两次输入的新密码不一致', 'error'); return; }
+    if (newPw === oldPw) { setMsg('新密码不能与当前密码相同', 'error'); return; }
+
+    setMsg('提交中...', 'info');
+    var params = 'old_password=' + encodeURIComponent(oldPw) +
+                 '&new_password=' + encodeURIComponent(newPw) +
+                 '&csrf_token=' + encodeURIComponent(getCSRF());
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/cgi-bin/user_change_pass.cgi', true);
+    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+    xhr.onload = function() {
+        if (xhr.status == 200) {
+            try {
+                var r = JSON.parse(xhr.responseText);
+                if (r.status == 'ok') {
+                    setMsg('密码修改成功，即将跳转...', 'success');
+                    setTimeout(function() { window.location.href = '/cgi-bin/main.cgi'; }, 800);
+                } else {
+                    if (r.message === 'Not authenticated') window.location.href = '/index.html';
+                    else setMsg('错误: ' + r.message, 'error');
+                }
+            } catch(e) { setMsg('解析失败', 'error'); }
+        } else { setMsg('请求失败', 'error'); }
+    };
+    xhr.onerror = function() { setMsg('网络错误', 'error'); };
+    xhr.send(params);
+}
+</script>
+
+<div class="change-card">
+    <h1>修改密码</h1>
+    <p class="sub">密码需 10-64 个字符，包含大小写字母、数字和特殊符号</p>
+    <div class="field-group">
+        <label for="old_password">当前密码</label>
+        <input type="password" id="old_password" autocomplete="current-password" required>
+    </div>
+    <div class="field-group">
+        <label for="new_password">新密码</label>
+        <input type="password" id="new_password" autocomplete="new-password" required>
+    </div>
+    <div class="field-group">
+        <label for="confirm_password">确认新密码</label>
+        <input type="password" id="confirm_password" autocomplete="new-password" required>
+        <div class="hint">每次修改后有效期 90 天，到期需重新修改</div>
+    </div>
+    <button id="btn-change" class="btn-action" onclick="submitChange()" style="padding:0.7rem;font-size:1rem">确认修改</button>
+    <div id="status" class="status-msg"></div>
+    <p style="margin-top:1rem;text-align:center"><a href="/cgi-bin/main.cgi" style="font-size:0.85rem;color:#888">返回控制面板</a></p>
+</div>
+</body>
+</html>

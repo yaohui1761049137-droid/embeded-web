@@ -34,8 +34,12 @@ if (!document.cookie.match(/csrf_token=/)) {
 <a data-tab="timesync" onclick="switchTab('timesync')">时间服务校验设置</a>
 <a data-tab="redundancy" onclick="switchTab('redundancy')">主备协同配置</a>
 	<a data-tab="usermgr" onclick="switchTab('usermgr');loadUserList()" id="nav-usermgr" style="display:none">用户管理</a>
+	<a style="cursor:pointer" onclick="window.location.href='/change.html'">修改密码</a>
 	</div>
 </nav>
+
+<!-- ADR-0002: password expiry warning banner (daysLeft ≤ 7) -->
+<div id="pw-warning" class="pw-warning" style="display:none"></div>
 
 <!-- Main content area -->
 <div class="main-content">
@@ -58,7 +62,7 @@ if (!document.cookie.match(/csrf_token=/)) {
 <!-- Board tabs toolbar -->
 <div class="network-toolbar">
 <div class="board-tabs">
-<a class="board-tab active" data-board="1" onclick="switchBoard(1)">Board 1 (ttyS7)</a>
+<a class="board-tab active" data-board="1" onclick="switchBoard(1)">Board 1 (本机)</a>
 <a class="board-tab" data-board="2" onclick="switchBoard(2)">Board 2 (ttyS4)</a>
 <a class="board-tab" data-board="3" onclick="switchBoard(3)">Board 3</a>
 <a class="board-tab" data-board="4" onclick="switchBoard(4)">Board 4</a>
@@ -273,7 +277,8 @@ if (!document.cookie.match(/csrf_token=/)) {
 	<tr>
 	<td class="config-label">密码</td>
 	<td class="config-value">
-	<input type="password" id="new-user-pass" class="input-full" placeholder="6-64 个字符" maxlength="64" autocomplete="off">
+	<input type="password" id="new-user-pass" class="input-full" placeholder="10-64 个字符" maxlength="64" autocomplete="off">
+	<div class="field-hint">密码需 10-64 个字符，包含大小写字母、数字和特殊符号</div>
 	</td>
 	</tr>
 	</table>
@@ -494,7 +499,7 @@ function loadRemoteConfig() {
                     document.getElementById(bp() + 'remote-ipv6').value = r.ipv6 || '';
                     setStatus('已获取配置', 'success');
                 } else {
-                    setStatus('错误: ' + r.message, 'error');
+                    if (!pwExpiredRedirect(r)) setStatus('错误: ' + r.message, 'error');
                 }
             } catch(e) { setStatus('解析失败', 'error'); }
         } else { setStatus('查询失败', 'error'); }
@@ -504,6 +509,13 @@ function loadRemoteConfig() {
 }
 
 function refreshRemoteConfig() { loadRemoteConfig(); }
+
+/* ADR-0001: 本机(Board 1)改 IP 后当前连接会断开。
+ * 记录待确认标记,用户以新 IP 重新登录后由 maybeConfirmLocal() 自动确认 */
+function localIpChanged(ip) {
+    sessionStorage.setItem('local_ip_changed', ip || '1');
+    setStatus('IP 已变更，请用新 IP(' + (ip || '新地址') + ')重新登录以确认生效', 'success');
+}
 
 function saveIPv4() {
     var ip = getIP(bp() + 'ip');
@@ -531,15 +543,23 @@ function saveIPv4() {
             try {
                 var r = JSON.parse(xhr.responseText);
                 if (r.status == 'ok') {
-                    setStatus('保存成功，正在刷新...', 'success');
-                    loadRemoteConfig();
+                    if (currentBoard == 1) {
+                        localIpChanged(ip);
+                    } else {
+                        setStatus('保存成功，正在刷新...', 'success');
+                        loadRemoteConfig();
+                    }
                 } else {
                     setStatus('错误: ' + r.message, 'error');
                 }
             } catch(e) { setStatus('解析失败', 'error'); }
         } else { setStatus('保存失败', 'error'); }
     };
-    xhr.onerror = function() { setStatus('网络错误', 'error'); };
+    xhr.onerror = function() {
+        /* 本机改 IP 时连接会断开,按"已变更"处理 */
+        if (currentBoard == 1) { localIpChanged(ip); }
+        else { setStatus('网络错误', 'error'); }
+    };
     xhr.send(params);
 }
 
@@ -569,16 +589,47 @@ function saveIPv6() {
             try {
                 var r = JSON.parse(xhr.responseText);
                 if (r.status == 'ok') {
-                    setStatus('IPv6 保存成功', 'success');
-                    loadRemoteConfig();
+                    if (currentBoard == 1) {
+                        /* nmcli con up 可能造成链路闪断 */
+                        localIpChanged(ip);
+                    } else {
+                        setStatus('IPv6 保存成功', 'success');
+                        loadRemoteConfig();
+                    }
                 } else {
                     setStatus('错误: ' + r.message, 'error');
                 }
             } catch(e) { setStatus('解析失败', 'error'); }
         } else { setStatus('保存失败', 'error'); }
     };
-    xhr.onerror = function() { setStatus('网络错误', 'error'); };
+    xhr.onerror = function() {
+        if (currentBoard == 1) { localIpChanged(ip); }
+        else { setStatus('网络错误', 'error'); }
+    };
     xhr.send(params);
+}
+
+/* ADR-0001: 新 IP 登录后自动确认,取消 handler-local.sh 的看门狗回滚 */
+function maybeConfirmLocal() {
+    if (!sessionStorage.getItem('local_ip_changed')) return;
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/cgi-bin/network.cgi?action=confirm', true);
+    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+    xhr.onload = function() {
+        if (xhr.status == 200) {
+            try {
+                var r = JSON.parse(xhr.responseText);
+                if (r.status == 'ok') {
+                    sessionStorage.removeItem('local_ip_changed');
+                    setStatus('新 IP 配置已确认生效', 'success');
+                } else {
+                    setStatus('确认失败: ' + r.message + '(下次加载重试)', 'error');
+                }
+            } catch(e) { /* 下次加载重试 */ }
+        } /* 非 200:下次加载重试 */
+    };
+    xhr.onerror = function() { /* 网络错误:下次加载重试 */ };
+    xhr.send('csrf_token=' + encodeURIComponent(getCSRF()));
 }
 
 function setStatus(msg, type) {
@@ -603,6 +654,32 @@ function setStatus(msg, type) {
     }
 })();
 
+/* ADR-0002: password expiry warning + forced-change redirect */
+(function() {
+    var u = window._currentUser;
+    if (!u || u.daysLeft === undefined) return;
+    if (u.daysLeft <= 0) {                       /* expired — shouldn't happen (main.cgi redirects), belt-and-braces */
+        window.location.href = '/change.html';
+        return;
+    }
+    if (u.daysLeft <= 7) {
+        var w = document.getElementById('pw-warning');
+        if (w) {
+            w.textContent = '密码将于 ' + u.daysLeft + ' 天后到期，请及时修改密码';
+            w.style.display = '';
+        }
+    }
+})();
+
+/* Redirect to change page when any API rejects an expired password */
+function pwExpiredRedirect(r) {
+    if (r && r.message && r.message.indexOf('密码已过期') >= 0) {
+        window.location.href = '/change.html';
+        return true;
+    }
+    return false;
+}
+
 function loadUserList() {
     var tbody = document.getElementById('user-list-body');
     var status = document.getElementById('usermgr-status');
@@ -620,9 +697,11 @@ function loadUserList() {
                     status.textContent = '';
                     status.className = '';
                 } else {
-                    tbody.innerHTML = '<tr><td colspan="6" class="placeholder-text" style="padding:2rem">加载失败</td></tr>';
-                    status.textContent = '错误: ' + r.message;
-                    status.className = 'status-msg status-error';
+                    if (!pwExpiredRedirect(r)) {
+                        tbody.innerHTML = '<tr><td colspan="6" class="placeholder-text" style="padding:2rem">加载失败</td></tr>';
+                        status.textContent = '错误: ' + r.message;
+                        status.className = 'status-msg status-error';
+                    }
                 }
             } catch(e) {
                 tbody.innerHTML = '<tr><td colspan="6" class="placeholder-text" style="padding:2rem">解析失败</td></tr>';
@@ -725,8 +804,8 @@ function createUser() {
         setUserStatus('用户名至少 3 个字符', 'error');
         return;
     }
-    if (!pass || pass.length < 6) {
-        setUserStatus('密码至少 6 个字符', 'error');
+    if (!pass || pass.length < 10) {
+        setUserStatus('密码至少 10 个字符', 'error');
         return;
     }
 
@@ -791,10 +870,10 @@ function toggleUser(id, enabled) {
 
 /* ── Reset Password ───────────────────────────────────────── */
 function resetPassword(id) {
-    var newPass = prompt('请输入新密码（6-64 个字符）：');
+    var newPass = prompt('请输入新密码（10-64 个字符，需包含大小写字母、数字和特殊符号）：');
     if (!newPass) return;
-    if (newPass.length < 6) {
-        setUserStatus('密码至少 6 个字符', 'error');
+    if (newPass.length < 10) {
+        setUserStatus('密码至少 10 个字符', 'error');
         return;
     }
     if (newPass.length > 64) {
@@ -859,6 +938,7 @@ function deleteUser(id, username) {
 }
 // ===========================================================
 setupOctetHandlers();
+maybeConfirmLocal();
 </script>
 
 </body>

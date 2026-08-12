@@ -3,6 +3,7 @@
 #include <sys/select.h>
 #include <asm-generic/termbits.h>
 #include <dirent.h>
+#include <errno.h>
 /* === HTTP Helpers === */
 
 void cgi_header(const char *content_type) {
@@ -98,9 +99,9 @@ void serial_close(int fd) {
     if (fd >= 0) close(fd);
 }
 
-/* Read one line (until \n) from serial fd with timeout_ms.
+/* Read one line (until \n) from fd with timeout_ms.
  * Returns bytes read, 0 on timeout, -1 on error. Strips \r. */
-int serial_read_line(int fd, char *buf, int max_len, int timeout_ms) {
+static int read_line_from(int fd, char *buf, int max_len, int timeout_ms) {
     fd_set set;
     struct timeval tv;
     int pos = 0;
@@ -125,6 +126,50 @@ int serial_read_line(int fd, char *buf, int max_len, int timeout_ms) {
 
     buf[pos] = '\0';
     return pos;
+}
+
+int serial_read_line(int fd, char *buf, int max_len, int timeout_ms) {
+    return read_line_from(fd, buf, max_len, timeout_ms);
+}
+
+/* === Local FIFO Channel (ADR-0001) === */
+/* 双 FIFO:cmd 通道 CGI 写 / handler 读,resp 通道 handler 写 / CGI 读,
+ * 避免单 FIFO 的自我回显。O_NONBLOCK 打开以在 handler 未运行时立即失败
+ * (cmd 侧 ENXIO),随后恢复阻塞模式,超时交给 read_line_from 的 select。 */
+
+static int fifo_resp_fd = -1;
+
+int fifo_open(const char *cmd_path, const char *resp_path) {
+    int cmd, resp;
+
+    if (access(cmd_path, F_OK) != 0) {
+        if (mkfifo(cmd_path, 0666) != 0 && errno != EEXIST) return -1;
+        chmod(cmd_path, 0666);        /* only when we created it */
+    }
+    if (access(resp_path, F_OK) != 0) {
+        if (mkfifo(resp_path, 0666) != 0 && errno != EEXIST) return -1;
+        chmod(resp_path, 0666);
+    }
+
+    cmd = open(cmd_path, O_WRONLY | O_NONBLOCK);
+    if (cmd < 0) return -1;            /* ENXIO: handler-local.sh 未运行 */
+    resp = open(resp_path, O_RDONLY | O_NONBLOCK);
+    if (resp < 0) { close(cmd); return -1; }
+    fifo_resp_fd = resp;
+
+    /* 恢复阻塞模式 */
+    fcntl(cmd, F_SETFL, fcntl(cmd, F_GETFL) & ~O_NONBLOCK);
+    fcntl(resp, F_SETFL, fcntl(resp, F_GETFL) & ~O_NONBLOCK);
+    return cmd;
+}
+
+void fifo_close(int fd) {
+    if (fd >= 0) close(fd);
+    if (fifo_resp_fd >= 0) { close(fifo_resp_fd); fifo_resp_fd = -1; }
+}
+
+int fifo_read_line(int fd, char *buf, int max_len, int timeout_ms) {
+    return read_line_from(fifo_resp_fd, buf, max_len, timeout_ms);
 }
 
 /* === POST Body Parsing === */

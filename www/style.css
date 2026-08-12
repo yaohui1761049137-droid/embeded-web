@@ -633,6 +633,14 @@ button#sendBtn:disabled {
     color: #c8c8d4;
 }
 
+/* --- Field hint under inputs (e.g. password policy) --- */
+
+.field-hint {
+    font-size: 0.78rem;
+    color: #999;
+    margin-top: 0.3rem;
+}
+
 /* --- Static IP text --- */
 
 .static-ip-text {
@@ -790,4 +798,14 @@ button#sendBtn:disabled {
 .btn-action-danger:hover {
     border-color: #c45050;
     background: #fdf5f5;
+}
+
+/* ADR-0002: password expiry warning banner */
+.pw-warning {
+    background: #fdf6ec;
+    border: 1px solid #e8c88a;
+    color: #8a5a00;
+    padding: 0.6rem 1rem;
+    font-size: 0.9rem;
+    text-align: center;
 }

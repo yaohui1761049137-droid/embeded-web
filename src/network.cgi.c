@@ -17,7 +17,7 @@
 /* ── Serial helpers ──────────────────────────────────────────────── */
 
 static int send_cmd(int fd, const char *cmd, char *resp, int max_resp,
-                    char *err_msg, int err_max) {
+                    char *err_msg, int err_max, int local) {
     int cmd_len = strlen(cmd);
     if (cmd_len < 1 || cmd_len > 200) {
         if (err_msg) snprintf(err_msg, err_max, "Invalid command");
@@ -37,7 +37,8 @@ static int send_cmd(int fd, const char *cmd, char *resp, int max_resp,
             if (err_msg) snprintf(err_msg, err_max, "Serial send failed");
             return -1;
         }
-        int n = serial_read_line(fd, resp, max_resp, CMD_TIMEOUT_MS);
+        int n = local ? fifo_read_line(fd, resp, max_resp, CMD_TIMEOUT_MS)
+                      : serial_read_line(fd, resp, max_resp, CMD_TIMEOUT_MS);
         if (n <= 0) {
             if (retry < max_retries - 1) { usleep(100000); continue; }
             if (err_msg) snprintf(err_msg, err_max, "Remote Board not responding");
@@ -72,26 +73,48 @@ static void json_escape(const char *src, char *dst, int max) {
 
 /* ── Actions ─────────────────────────────────────────────────────── */
 
-static int handle_get(const char *serial_dev, unsigned int baud) {
+/* ADR-0001: local=1 走本机 FIFO(handler-local.sh + nmcli),否则走串口 */
+static int open_channel(int local, const char *serial_dev, unsigned int baud) {
+    return local ? fifo_open(LOCAL_FIFO_PATH, LOCAL_RESP_FIFO)
+                 : serial_open(serial_dev, baud);
+}
+
+static void close_channel(int local, int fd) {
+    if (local) fifo_close(fd); else serial_close(fd);
+}
+
+static int handle_get(const char *serial_dev, unsigned int baud, int local) {
     char resp[RESP_BUF], err[128];
     char ip[64] = "", mask[64] = "", gateway[64] = "";
     char ipv6[128] = "";
 
-    int fd = serial_open(serial_dev, baud);
+    int fd = open_channel(local, serial_dev, baud);
     if (fd < 0) {
         cgi_header("application/json");
-        printf("{\"status\":\"error\",\"message\":\"Cannot open serial port\"}");
+        printf("{\"status\":\"error\",\"message\":\"%s\"}",
+               local ? "本地通道不可用(handler-local.sh 未运行?)"
+                     : "Cannot open serial port");
         return 0;
     }
-    send_cmd(fd, "PING", resp, sizeof(resp), NULL, 0);
+    send_cmd(fd, "PING", resp, sizeof(resp), NULL, 0, local);
 
-    int r = send_cmd(fd, "REMOTE_GET_IPV4", resp, sizeof(resp), err, sizeof(err));
+    int r = send_cmd(fd, "REMOTE_GET_IPV4", resp, sizeof(resp), err, sizeof(err), local);
     if (r == 1) sscanf(resp, "OK %63s %63s %63s", ip, mask, gateway);
 
-    r = send_cmd(fd, "REMOTE_GET_IPV6", resp, sizeof(resp), err, sizeof(err));
+    r = send_cmd(fd, "REMOTE_GET_IPV6", resp, sizeof(resp), err, sizeof(err), local);
     if (r == 1) sscanf(resp, "OK %127s", ipv6);
 
-    serial_close(fd);
+    close_channel(local, fd);
+
+    /* If no IPv4 data was retrieved, the remote board didn't respond —
+     * report an error instead of returning empty data with "ok" status. */
+    if (ip[0] == '\0') {
+        cgi_header("application/json");
+        printf("{\"status\":\"error\",\"message\":\"%s\"}",
+               local ? "本机无响应(handler-local.sh 异常?)"
+                     : "Board 2 无响应(未连接或 handler.sh 未运行?)");
+        return 0;
+    }
 
     cgi_header("application/json");
     printf("{\"status\":\"ok\",\"ipv4\":{\"ip\":\"%s\",\"mask\":\"%s\",\"gateway\":\"%s\"},\"ipv6\":\"%s\"}",
@@ -99,7 +122,7 @@ static int handle_get(const char *serial_dev, unsigned int baud) {
     return 0;
 }
 
-static int handle_set(const char *serial_dev, unsigned int baud) {
+static int handle_set(const char *serial_dev, unsigned int baud, int local) {
     char *ip      = get_post_param("ip");
     char *mask    = get_post_param("mask");
     char *gateway = get_post_param("gateway");
@@ -111,26 +134,28 @@ static int handle_set(const char *serial_dev, unsigned int baud) {
         return 0;
     }
 
-    int fd = serial_open(serial_dev, baud);
+    int fd = open_channel(local, serial_dev, baud);
     if (fd < 0) {
         cgi_header("application/json");
-        printf("{\"status\":\"error\",\"message\":\"Cannot open serial port\"}");
+        printf("{\"status\":\"error\",\"message\":\"%s\"}",
+               local ? "本地通道不可用(handler-local.sh 未运行?)"
+                     : "Cannot open serial port");
         return 0;
     }
 
     char resp[RESP_BUF], err[256], err_summary[512] = "";
     int all_ok = 1;
 
-    send_cmd(fd, "PING", resp, sizeof(resp), NULL, 0);
+    send_cmd(fd, "PING", resp, sizeof(resp), NULL, 0, local);
 
     char cmd[256];
     snprintf(cmd, sizeof(cmd), "REMOTE_SET_IPV4 %s %s %s", ip, mask, gateway);
-    int r = send_cmd(fd, cmd, resp, sizeof(resp), err, sizeof(err));
+    int r = send_cmd(fd, cmd, resp, sizeof(resp), err, sizeof(err), local);
     if (r < 1) { all_ok = 0; snprintf(err_summary, sizeof(err_summary), "IPv4: %s", err); }
 
     if (ipv6 && *ipv6) {
         snprintf(cmd, sizeof(cmd), "REMOTE_SET_IPV6 %s", ipv6);
-        r = send_cmd(fd, cmd, resp, sizeof(resp), err, sizeof(err));
+        r = send_cmd(fd, cmd, resp, sizeof(resp), err, sizeof(err), local);
         if (r < 1) {
             all_ok = 0;
             int cur = strlen(err_summary);
@@ -139,7 +164,7 @@ static int handle_set(const char *serial_dev, unsigned int baud) {
         }
     }
 
-    serial_close(fd);
+    close_channel(local, fd);
 
     cgi_header("application/json");
     if (all_ok) {
@@ -150,6 +175,26 @@ static int handle_set(const char *serial_dev, unsigned int baud) {
         printf("{\"status\":\"error\",\"message\":\"%s\"}", esc);
     }
     return all_ok ? 1 : 0;
+}
+
+/* ADR-0001: 取消本机看门狗回滚(发送 REMOTE_CONFIRM_IPV4 给 handler-local.sh) */
+static int handle_confirm(void) {
+    int fd = fifo_open(LOCAL_FIFO_PATH, LOCAL_RESP_FIFO);
+    if (fd < 0) {
+        cgi_header("application/json");
+        printf("{\"status\":\"error\",\"message\":\"本地通道不可用(handler-local.sh 未运行?)\"}");
+        return 0;
+    }
+    char resp[RESP_BUF], err[128];
+    int r = send_cmd(fd, "REMOTE_CONFIRM_IPV4", resp, sizeof(resp), err, sizeof(err), 1);
+    fifo_close(fd);
+
+    cgi_header("application/json");
+    if (r >= 1)
+        printf("{\"status\":\"ok\",\"message\":\"已确认生效\"}");
+    else
+        printf("{\"status\":\"error\",\"message\":\"确认失败: %s\"}", err[0] ? err : "通道无响应");
+    return r >= 1 ? 1 : 0;
 }
 
 /* ── Entry point ─────────────────────────────────────────────────── */
@@ -167,6 +212,15 @@ int main(void) {
         return 0;
     }
 
+    /* ADR-0002: forced-change gate — expired password blocks everything
+     * except the change-password CGI */
+    if (!auth_require_password_current(&session)) {
+        cgi_header("application/json");
+        printf("{\"status\":\"error\",\"message\":\"密码已过期,请先修改密码\"}");
+        auth_cleanup();
+        return 0;
+    }
+
     /* Parse action & port */
     const char *qs = get_env("QUERY_STRING");
     char action[16] = "";
@@ -177,8 +231,11 @@ int main(void) {
         action[i] = '\0';
     }
 
-    const char *serial_dev = REMOTE_SERIAL_DEVICE;  /* default ttyS7 */
-    unsigned int baud     = REMOTE_SERIAL_BAUD;     /* default 115200 */
+    /* ADR-0001: 默认本地模式(本机即 Board 1,经 FIFO 交给 handler-local.sh);
+     * port=s4 → 远端 Board 2(串口) */
+    int local = 1;
+    const char *serial_dev = REMOTE_SERIAL_DEVICE_2;
+    unsigned int baud     = REMOTE_SERIAL_BAUD_2;
     {
         const char *p = strstr(qs, "port=");
         if (p) {
@@ -188,6 +245,7 @@ int main(void) {
                 port[i] = p[5+i];
             port[i] = '\0';
             if (strcmp(port, "s4") == 0) {
+                local = 0;
                 serial_dev = REMOTE_SERIAL_DEVICE_2;
                 baud       = REMOTE_SERIAL_BAUD_2;
             }
@@ -196,7 +254,7 @@ int main(void) {
 
     if (strcmp(action, "get") == 0) {
         auth_cleanup();
-        return handle_get(serial_dev, baud);
+        return handle_get(serial_dev, baud, local);
     }
 
     /* For "set": CSRF check FIRST (before POST params consumed by handle_set) */
@@ -208,14 +266,28 @@ int main(void) {
             auth_cleanup();
             return 0;
         }
-        int result = handle_set(serial_dev, baud);
+        int result = handle_set(serial_dev, baud, local);
         if (result == 1) {
             auth_audit_log(session.user_id, "network_set", session.user_id,
-                           "Remote Board network config modified via serial",
+                           local ? "Local board network config modified via nmcli"
+                                 : "Remote Board network config modified via serial",
                            getenv("REMOTE_ADDR"));
         }
         auth_cleanup();
         return result;
+    }
+
+    /* ADR-0001: 取消本机看门狗回滚(新 IP 登录成功后由前端调用) */
+    if (strcmp(action, "confirm") == 0) {
+        const char *csrf = get_post_param("csrf_token");
+        if (!csrf || !auth_csrf_verify(&session, csrf)) {
+            cgi_header("application/json");
+            printf("{\"status\":\"error\",\"message\":\"CSRF token invalid\"}");
+            auth_cleanup();
+            return 0;
+        }
+        auth_cleanup();
+        return handle_confirm();
     }
 
     cgi_header("application/json");

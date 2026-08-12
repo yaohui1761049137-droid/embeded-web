@@ -20,6 +20,15 @@ int main(void) {
         return 0;
     }
 
+    /* ADR-0002: forced-change gate — expired password blocks everything
+     * except the change-password CGI */
+    if (!auth_require_password_current(&session)) {
+        cgi_header("application/json");
+        printf("{\"status\":\"error\",\"message\":\"密码已过期,请先修改密码\"}");
+        auth_cleanup();
+        return 0;
+    }
+
     if (!auth_require_role(&session, "root")) {
         cgi_header("application/json");
         printf("{\"status\":\"error\",\"message\":\"Forbidden\"}");
