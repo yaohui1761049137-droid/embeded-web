@@ -22,7 +22,9 @@
 #define RESP_BUF        256
 
 /* Board table: port key ("" = default) → device/baud.
- * Board 3/4 = add a row here + a form in control_panel.html. */
+ * Board 3/4 = add a row here + an entry in the front-end registry
+ * (www/control_panel.html BOARDS) — test_frontend.py checks both
+ * tables stay in sync on the port key. */
 typedef struct {
     const char *port;
     const char *device;

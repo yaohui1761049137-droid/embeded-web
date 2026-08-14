@@ -85,7 +85,8 @@ embeded_Lighttpd/
 ├── test_gate.sh               宿主机门卫单测（CGI 级，无需板子）
 ├── test_users.c               宿主机用户模块单测（API 级，无需板子）
 ├── test_remote.c              宿主机协议客户端单测（API 级，pty 假板驱动）
-└── test_fake_board.py         脚本化假 Remote Board（pty 协议仿真，供离线测试）
+├── test_fake_board.py         脚本化假 Remote Board（pty 协议仿真，供离线测试）
+└── test_frontend.py           前端板注册表 ↔ remote.c 板表一致性测试（离线）
 ```
 
 ## 快速开始
@@ -173,13 +174,15 @@ ssh root@<board> '
 ./test_gate.sh
 ```
 
-`test_gate.sh` 内置三层：
+`test_gate.sh` 内置四层：
 - CGI 级门卫测试（gate 阶梯 + 登录/登出 + 用户 CRUD 冒烟）
 - API 级用户模块测试（`test_users.c` 直接断言 users 模块的不变量：自删/删 root/禁最后
   root 拒绝、审计行 target_user_id 正确）
 - 串口离线测试：`test_remote.c` 通过 pty 假板（`test_fake_board.py`）驱动 remote 模块，
   覆盖重试、超时、ERR、乱码响应与板表查表；`test_gate.sh` 内另有 4 项 network.cgi 冒烟
   （`REMOTE_SERIAL_DEVICE_OVERRIDE` 指向 pty，端到端验证 JSON 形状与未知 port 拒绝）
+- 前端注册表一致性：`test_frontend.py` 解析 `control_panel.html` 的 `BOARDS` 与
+  `remote.c` 板表，断言 port 键双向一致（渲染本身由浏览器截图核对，curl 测不到 JS 生成物）
 
 板端端到端测试（需 LubanCat + Remote Board 在线）：
 
@@ -233,10 +236,13 @@ Set-Cookie: csrf_token=<32 hex>; Path=/; Secure; SameSite=Lax; Max-Age=3600
 | Board 1 | 192.168.8.201 | `/dev/ttyS7` | 115200 | 默认（无 port 参数） |
 | Board 2 | 192.168.8.99 | `/dev/ttyS4` | 38400 | `port=s4` |
 
-Web 控制面板中 Board 1/2 各自拥有独立表单，切换时互不覆盖。Board 3/4 预留位置。
+Web 控制面板的板卡选项卡由前端注册表（`control_panel.html` 的 `BOARDS`）驱动渲染：
+单一表单按当前 Board 重载各自配置，Board 3/4 以占位 tab 预留。
 
-代码侧板表位于 `src/remote.c`（Board 3/4 = 表里加一行 + 前端表单 + 测试）；CGI 经
-`remote_board_lookup()` 查表，未知 port 返回错误而非静默落到 Board 1。
+板表有两处、共享 port 键：协议路由表在 `src/remote.c`（port → device/baud），
+UI 注册表在前端 `BOARDS`（tab 标签 / port 参数 / 占位板）。`test_frontend.py` 断言
+两者双向一致（加板漏改任一侧即红）。CGI 经 `remote_board_lookup()` 查表，未知 port
+返回错误而非静默落到 Board 1。Board 3 上线 = 两张表各加一行。
 
 ## Remote Board 部署
 

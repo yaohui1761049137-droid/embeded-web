@@ -292,6 +292,21 @@ else
     PASS=$((PASS + 1))
 fi
 
+# ── Frontend registry consistency (offline) ─────────────────────────
+echo ""
+echo "── Frontend registry consistency ──"
+set +e
+python3 "$(dirname "$0")/test_frontend.py" "$(dirname "$0")"
+FE_RC=$?
+set -e
+if [ $FE_RC -ne 0 ]; then
+    red "  ❌ frontend registry tests failed (rc=$FE_RC)"
+    FAIL=$((FAIL + 1))
+else
+    green "  ✅ frontend registry consistent"
+    PASS=$((PASS + 1))
+fi
+
 # ── Summary ─────────────────────────────────────────────────────────
 echo ""
 echo "========================================="

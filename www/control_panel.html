@@ -55,19 +55,14 @@ if (!document.cookie.match(/csrf_token=/)) {
 <div id="tab-network" class="tab-content">
 <h2>网络参数配置</h2>
 
-<!-- Board tabs toolbar -->
+<!-- Board tabs toolbar (tabs built from the BOARDS registry at load) -->
 <div class="network-toolbar">
-<div class="board-tabs">
-<a class="board-tab active" data-board="1" onclick="switchBoard(1)">Board 1 (ttyS7)</a>
-<a class="board-tab" data-board="2" onclick="switchBoard(2)">Board 2 (ttyS4)</a>
-<a class="board-tab" data-board="3" onclick="switchBoard(3)">Board 3</a>
-<a class="board-tab" data-board="4" onclick="switchBoard(4)">Board 4</a>
-</div>
+<div class="board-tabs" id="board-tabs"></div>
 <button class="btn-refresh" onclick="refreshRemoteConfig()">刷新</button>
 </div>
 
-<!-- Board 1 config -->
-<div id="board-config-1">
+<!-- Board config: single form, repopulated for the active board on switch -->
+<div id="board-config">
 
 <!-- IPv4 Panel -->
 <div class="config-panel">
@@ -147,89 +142,8 @@ if (!document.cookie.match(/csrf_token=/)) {
 
 <span id="remote-status"></span>
 </div><!-- end board-config -->
-<!-- Board 2 config -->
-<div id="board-config-2" style="display:none">
 
-<!-- IPv4 Panel -->
-<div class="config-panel">
-<div class="panel-header">IP地址</div>
-<div class="panel-body">
-<table class="config-table">
-<tr>
-<td class="config-label">地址类型</td>
-<td class="config-value"><span class="static-ip-text">Static IP</span></td>
-</tr>
-<tr>
-<td class="config-label">IP</td>
-<td class="config-value">
-<div class="ip-segments" id="2-ip-segments">
-<input type="text" class="ip-octet" id="2-ip-o0" maxlength="3" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
-<span class="ip-dot">.</span>
-<input type="text" class="ip-octet" id="2-ip-o1" maxlength="3" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
-<span class="ip-dot">.</span>
-<input type="text" class="ip-octet" id="2-ip-o2" maxlength="3" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
-<span class="ip-dot">.</span>
-<input type="text" class="ip-octet" id="2-ip-o3" maxlength="3" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
-</div>
-</td>
-</tr>
-<tr>
-<td class="config-label">子网掩码</td>
-<td class="config-value">
-<div class="ip-segments" id="2-mask-segments">
-<input type="text" class="ip-octet" id="2-mask-o0" maxlength="3" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
-<span class="ip-dot">.</span>
-<input type="text" class="ip-octet" id="2-mask-o1" maxlength="3" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
-<span class="ip-dot">.</span>
-<input type="text" class="ip-octet" id="2-mask-o2" maxlength="3" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
-<span class="ip-dot">.</span>
-<input type="text" class="ip-octet" id="2-mask-o3" maxlength="3" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
-</div>
-</td>
-</tr>
-<tr>
-<td class="config-label">网关</td>
-<td class="config-value">
-<div class="ip-segments" id="2-gw-segments">
-<input type="text" class="ip-octet" id="2-gw-o0" maxlength="3" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
-<span class="ip-dot">.</span>
-<input type="text" class="ip-octet" id="2-gw-o1" maxlength="3" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
-<span class="ip-dot">.</span>
-<input type="text" class="ip-octet" id="2-gw-o2" maxlength="3" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
-<span class="ip-dot">.</span>
-<input type="text" class="ip-octet" id="2-gw-o3" maxlength="3" inputmode="numeric" pattern="[0-9]*" autocomplete="off">
-</div>
-</td>
-</tr>
-</table>
-<div class="panel-actions">
-<button class="btn-set" onclick="saveIPv4()">设置</button>
-</div>
-</div>
-</div>
-
-<!-- IPv6 Panel -->
-<div class="config-panel">
-<div class="panel-header">IPv6地址</div>
-<div class="panel-body">
-<table class="config-table">
-<tr>
-<td class="config-label">IPv6静态地址</td>
-<td class="config-value">
-<input type="text" class="input-full" id="2-remote-ipv6" placeholder="2001:db8::1/64" autocomplete="off">
-</td>
-</tr>
-</table>
-<div class="panel-actions">
-<button class="btn-set" onclick="saveIPv6()">设置</button>
-</div>
-</div>
-</div>
-
-<span id="2-remote-status"></span>
-</div><!-- end board-config -->
-
-<!-- Placeholder for Boards 2-4 -->
+<!-- Placeholder for unsupported boards (ok:false in BOARDS) -->
 <div id="board-placeholder" style="display:none">
 <p class="placeholder-text">该 Board 将在后续版本中支持</p>
 </div>
@@ -357,34 +271,64 @@ function sendCommand() {
 }
 
 /* ================================================================
-   Board Tab Switching
+   Board Registry + Tab Switching
    ================================================================ */
+/* Front-end board registry — mirrors the board table in src/remote.c.
+ * The two tables share one field: the port key (test_frontend.py
+ * asserts they stay in sync).  ok:false boards render as placeholder
+ * tabs; a real Board 3 = one row in both tables. */
+var BOARDS = [
+    { id: 1, port: '',   label: 'Board 1', dev: 'ttyS7', ok: true  },
+    { id: 2, port: 's4', label: 'Board 2', dev: 'ttyS4', ok: true  },
+    { id: 3, label: 'Board 3', ok: false },
+    { id: 4, label: 'Board 4', ok: false },
+];
+
 var currentBoard = 1;
 
-/* Board element ID prefix: '' for Board 1, '2-' for Board 2 */
-function bp() { return currentBoard == 2 ? '2-' : ''; }
+function boardEntry() {
+    for (var i = 0; i < BOARDS.length; i++)
+        if (BOARDS[i].id === currentBoard) return BOARDS[i];
+    return null;
+}
 
+/* Single form in the DOM; switching repopulates it for the active board.
+ * (This matches the old behavior: switching always reloaded anyway.) */
 function switchBoard(b) {
     currentBoard = b;
     var tabs = document.querySelectorAll('.board-tab');
     for (var i = 0; i < tabs.length; i++) tabs[i].classList.remove('active');
     document.querySelector('.board-tab[data-board="' + b + '"]').classList.add('active');
-    if (b == 1 || b == 2) {
-        document.getElementById('board-config-1').style.display = (b == 1) ? 'block' : 'none';
-        document.getElementById('board-config-2').style.display = (b == 2) ? 'block' : 'none';
+
+    var entry = boardEntry();
+    if (entry && entry.ok) {
+        document.getElementById('board-config').style.display = 'block';
         document.getElementById('board-placeholder').style.display = 'none';
         loadRemoteConfig();
     } else {
-        document.getElementById('board-config-1').style.display = 'none';
-        document.getElementById('board-config-2').style.display = 'none';
+        document.getElementById('board-config').style.display = 'none';
         document.getElementById('board-placeholder').style.display = 'block';
     }
 }
 
-/* Build CGI URL with port param for Board 2 (ttyS4) */
+/* Build the tab list from the registry (unsupported boards get a tab too) */
+function buildBoardTabs() {
+    var html = '';
+    for (var i = 0; i < BOARDS.length; i++) {
+        var b = BOARDS[i];
+        var label = b.label + (b.dev ? ' (' + b.dev + ')' : '');
+        html += '<a class="board-tab' + (b.id === 1 ? ' active' : '') +
+                '" data-board="' + b.id + '" onclick="switchBoard(' + b.id + ')">' +
+                label + '</a>';
+    }
+    document.getElementById('board-tabs').innerHTML = html;
+}
+
+/* CGI URL for the active board; port param only when the board has one */
 function networkUrl(action) {
     var url = '/cgi-bin/network.cgi?action=' + action;
-    if (currentBoard == 2) url += '&port=s4';
+    var b = boardEntry();
+    if (b && b.ok && b.port) url += '&port=' + b.port;
     return url;
 }
 
@@ -488,10 +432,10 @@ function loadRemoteConfig() {
             try {
                 var r = JSON.parse(xhr.responseText);
                 if (r.status == 'ok') {
-                    setIP(bp() + 'ip', r.ipv4.ip);
-                    setIP(bp() + 'mask', r.ipv4.mask);
-                    setIP(bp() + 'gw', r.ipv4.gateway);
-                    document.getElementById(bp() + 'remote-ipv6').value = r.ipv6 || '';
+                    setIP('ip', r.ipv4.ip);
+                    setIP('mask', r.ipv4.mask);
+                    setIP('gw', r.ipv4.gateway);
+                    document.getElementById('remote-ipv6').value = r.ipv6 || '';
                     setStatus('已获取配置', 'success');
                 } else {
                     setStatus('错误: ' + r.message, 'error');
@@ -506,10 +450,10 @@ function loadRemoteConfig() {
 function refreshRemoteConfig() { loadRemoteConfig(); }
 
 function saveIPv4() {
-    var ip = getIP(bp() + 'ip');
-    var mask = getIP(bp() + 'mask');
-    var gw = getIP(bp() + 'gw');
-    var v6 = document.getElementById(bp() + 'remote-ipv6').value.trim();
+    var ip = getIP('ip');
+    var mask = getIP('mask');
+    var gw = getIP('gw');
+    var v6 = document.getElementById('remote-ipv6').value.trim();
 
     /* Validate */
     if (!ip || ip === '0.0.0.0') {
@@ -545,10 +489,10 @@ function saveIPv4() {
 
 function saveIPv6() {
     /* Collect current IPv4 values to include them (CGI requires them) */
-    var ip = getIP(bp() + 'ip');
-    var mask = getIP(bp() + 'mask');
-    var gw = getIP(bp() + 'gw');
-    var v6 = document.getElementById(bp() + 'remote-ipv6').value.trim();
+    var ip = getIP('ip');
+    var mask = getIP('mask');
+    var gw = getIP('gw');
+    var v6 = document.getElementById('remote-ipv6').value.trim();
 
     if (!v6) {
         setStatus('请输入 IPv6 地址', 'error');
@@ -582,7 +526,7 @@ function saveIPv6() {
 }
 
 function setStatus(msg, type) {
-    var el = document.getElementById(bp() + 'remote-status');
+    var el = document.getElementById('remote-status');
     if (!el) return;
     el.textContent = msg;
     el.className = 'status-msg status-' + type;
@@ -859,6 +803,7 @@ function deleteUser(id, username) {
 }
 // ===========================================================
 setupOctetHandlers();
+buildBoardTabs();
 </script>
 
 </body>
