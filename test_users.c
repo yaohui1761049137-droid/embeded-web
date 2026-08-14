@@ -43,7 +43,7 @@ static void expect_fail(int rc, const char *err, const char *needle,
 
 static int seed_user(const char *username, const char *role, int enabled) {
     char hash[256];
-    if (auth_hash_password("testpass123", hash, sizeof(hash)) != 0) return -1;
+    if (auth_hash_password("Testpass123!", hash, sizeof(hash)) != 0) return -1;
     sqlite3 *db = auth_db();
     sqlite3_stmt *stmt;
     const char *sql =
@@ -130,31 +130,51 @@ int main(int argc, char **argv) {
     free(rows);
 
     /* ── create + audit (FK regression) ────────────────────────── */
-    check(users_create(root_id, "alice", "pass123456",
+    check(users_create(root_id, "alice", "TestPass123!",
                        err, sizeof(err)) == 0, "create alice ok");
     int alice_id = find_id("alice");
     check(alice_id > 0, "alice in DB");
     check(audit_count("create_user", alice_id) == 1,
           "audit: create_user targets alice (old code wrote target=0, "
           "FK silently dropped the row)");
-    check(users_create(root_id, "bob", "pass123456",
+    check(users_create(root_id, "bob", "TestPass123!",
                        err, sizeof(err)) == 0, "create bob ok");
     int bob_id = find_id("bob");
     check(bob_id > 0, "bob in DB");
 
     /* ── validation ────────────────────────────────────────────── */
-    expect_fail(users_create(root_id, "alice", "pass123456",
+    expect_fail(users_create(root_id, "alice", "TestPass123!",
                              err, sizeof(err)), err, "already exist",
                 "duplicate username refused");
-    expect_fail(users_create(root_id, "ab", "pass123456",
+    expect_fail(users_create(root_id, "ab", "TestPass123!",
                              err, sizeof(err)), err, "Invalid parameters",
                 "short username refused");
     expect_fail(users_create(root_id, "carol", "pass1",
-                             err, sizeof(err)), err, "Invalid parameters",
-                "short password refused");
+                             err, sizeof(err)), err, "密码长度需为",
+                "short password refused (policy)");
     expect_fail(users_create(root_id, NULL, NULL,
                              err, sizeof(err)), err, "Invalid parameters",
                 "null params refused");
+
+    /* ── password policy (ADR-0002) ────────────────────────────── */
+    check(auth_password_policy_ok("TestPass123!", NULL, 0) == 1,
+          "policy: strong password accepted");
+    check(auth_password_policy_ok("pass123456", NULL, 0) == 0,
+          "policy: no upper / no punct refused");
+    check(auth_password_policy_ok("abcdefghij", NULL, 0) == 0,
+          "policy: letters only refused");
+    check(auth_password_policy_ok("Abcd1234!中", NULL, 0) == 0,
+          "policy: non-ASCII refused");
+    check(auth_password_policy_ok("Abcd1234 !", NULL, 0) == 0,
+          "policy: space refused");
+    check(auth_password_policy_ok(NULL, NULL, 0) == 0,
+          "policy: NULL refused");
+    {
+        char perr[128];
+        auth_password_policy_ok("pass1", perr, sizeof(perr));
+        check(strstr(perr, "密码长度需为") != NULL,
+              "policy: length error message written");
+    }
 
     /* ── delete invariants ─────────────────────────────────────── */
     expect_fail(users_delete(root_id, root_id, err, sizeof(err)),
@@ -173,13 +193,13 @@ int main(int argc, char **argv) {
                 err, "Cannot delete root user", "root-delete refused");
 
     /* ── passwd ────────────────────────────────────────────────── */
-    check(users_passwd(root_id, bob_id, "newpass123",
+    check(users_passwd(root_id, bob_id, "Newpass123!",
                        err, sizeof(err)) == 0, "passwd bob ok");
     check(audit_count("reset_password", bob_id) == 1,
           "audit: reset_password targets bob");
     {
         int id = -1;
-        check(auth_user_login("bob", "newpass123", &id) == bob_id,
+        check(auth_user_login("bob", "Newpass123!", &id) == bob_id,
               "bob logs in with new password");
     }
 
@@ -192,7 +212,7 @@ int main(int argc, char **argv) {
           "audit: disable_user targets bob");
     {
         int id = -1;
-        check(auth_user_login("bob", "newpass123", &id) == -1,
+        check(auth_user_login("bob", "Newpass123!", &id) == -1,
               "disabled user cannot log in");
     }
     expect_fail(users_toggle(root_id, 999, 1, err, sizeof(err)),

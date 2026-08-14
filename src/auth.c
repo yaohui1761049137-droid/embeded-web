@@ -22,6 +22,7 @@ static sqlite3 *g_db = NULL;
 static char     g_db_path[256] = {0};
 
 static void migrate_delete_fks(sqlite3 *db);
+static void migrate_password_policy(sqlite3 *db);
 
 /* ── Database init / cleanup ──────────────────────────────────────── */
 
@@ -64,6 +65,8 @@ int auth_init(const char *db_path) {
         "  updated_at    INTEGER NOT NULL,"
         "  last_login_at INTEGER,"
         "  created_by    INTEGER,"
+        "  password_changed_at INTEGER NOT NULL DEFAULT 0,"
+        "  FOREIGN KEY (created_by) REFERENCES users(id)"
         "  FOREIGN KEY (created_by) REFERENCES users(id)"
         ");"
         "CREATE TABLE IF NOT EXISTS sessions ("
@@ -96,8 +99,37 @@ int auth_init(const char *db_path) {
     }
 
     migrate_delete_fks(g_db);
+    migrate_password_policy(g_db);
 
     return 0;
+}
+
+/* ADR-0002: legacy users tables lack password_changed_at; add it so
+ * pre-policy accounts are treated as expired (0) → forced change on
+ * next login.  Probe with PRAGMA table_info instead of an unconditional
+ * ALTER (which would fail once the column exists). */
+static void migrate_password_policy(sqlite3 *db) {
+    sqlite3_stmt *stmt;
+    int found = 0;
+    const char *sql = "PRAGMA table_info(users)";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char *name = (const char *)sqlite3_column_text(stmt, 1);
+            if (name && strcmp(name, "password_changed_at") == 0) {
+                found = 1;
+                break;
+            }
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    if (!found) {
+        sqlite3_exec(db,
+            "ALTER TABLE users ADD COLUMN password_changed_at "
+            "INTEGER NOT NULL DEFAULT 0",
+            NULL, NULL, NULL);
+    }
 }
 
 /* ── Schema migration ─────────────────────────────────────────────── */
@@ -505,6 +537,96 @@ int auth_user_login(const char *username, const char *password,
 
     if (user_id_out) *user_id_out = user_id;
     return user_id;
+}
+
+/* ── Password policy (ADR-0002) ──────────────────────────────────── */
+
+int auth_password_policy_ok(const char *password, char *err, int err_max) {
+    int len, i;
+    int has_upper = 0, has_lower = 0, has_digit = 0, has_punct = 0;
+
+    if (!password) return 0;
+    len = strlen(password);
+
+    if (len < PASSWORD_MIN_LEN || len > PASSWORD_MAX_LEN) {
+        if (err) snprintf(err, err_max, "密码长度需为 %d-%d 个字符",
+                          PASSWORD_MIN_LEN, PASSWORD_MAX_LEN);
+        return 0;
+    }
+
+    for (i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)password[i];
+        if (c < 0x21 || c > 0x7E) {   /* control chars, space, non-ASCII */
+            if (err) snprintf(err, err_max,
+                              "密码只能包含 ASCII 可见字符(不允许中文、空格)");
+            return 0;
+        }
+        if (c >= 'A' && c <= 'Z')      has_upper = 1;
+        else if (c >= 'a' && c <= 'z') has_lower = 1;
+        else if (c >= '0' && c <= '9') has_digit = 1;
+        else                           has_punct = 1;  /* ASCII punct 0x21-0x7E */
+    }
+
+    if (!has_upper || !has_lower || !has_digit || !has_punct) {
+        if (err) snprintf(err, err_max,
+                          "密码需包含大写字母、小写字母、数字和特殊符号");
+        return 0;
+    }
+    return 1;
+}
+
+/* Read users.password_changed_at; returns 1 if found, 0 otherwise. */
+static int auth_user_password_changed_at(int user_id, int64_t *out) {
+    sqlite3_stmt *stmt;
+
+    if (!g_db || user_id <= 0) return 0;
+
+    if (sqlite3_prepare_v2(g_db,
+            "SELECT password_changed_at FROM users WHERE id = ?",
+            -1, &stmt, NULL) != SQLITE_OK)
+        return 0;
+
+    sqlite3_bind_int(stmt, 1, user_id);
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        *out = sqlite3_column_int64(stmt, 0);
+        sqlite3_finalize(stmt);
+        return 1;
+    }
+    sqlite3_finalize(stmt);
+    return 0;
+}
+
+int auth_user_must_change_password(int user_id) {
+    int64_t changed_at;
+    if (!auth_user_password_changed_at(user_id, &changed_at)) return 0;
+    if (changed_at == 0) return 1;                     /* legacy account */
+    return (time(NULL) - changed_at >=
+            (int64_t)PASSWORD_EXPIRE_DAYS * 86400LL) ? 1 : 0;
+}
+
+int auth_user_days_left(int user_id) {
+    int64_t changed_at, days;
+    if (!auth_user_password_changed_at(user_id, &changed_at)) return -1;
+    if (changed_at == 0) return 0;
+    days = ((int64_t)PASSWORD_EXPIRE_DAYS * 86400LL
+            - (time(NULL) - changed_at)) / 86400;
+    return days < 0 ? 0 : (int)days;
+}
+
+void auth_kick_user_sessions(int user_id, const char *keep_sid) {
+    sqlite3_stmt *stmt;
+    if (!g_db || user_id <= 0) return;
+
+    const char *sql = keep_sid
+        ? "DELETE FROM sessions WHERE user_id = ? AND sid != ?"
+        : "DELETE FROM sessions WHERE user_id = ?";
+
+    if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        sqlite3_bind_int(stmt, 1, user_id);
+        if (keep_sid) sqlite3_bind_text(stmt, 2, keep_sid, -1, SQLITE_STATIC);
+        sqlite3_step(stmt);
+        sqlite3_finalize(stmt);
+    }
 }
 
 /* ── Permissions ─────────────────────────────────────────────────── */

@@ -20,7 +20,7 @@ static void emit_not_authenticated(int page_mode) {
     }
 }
 
-static int gate_session(SessionInfo *out, int page_mode) {
+static int gate_session(SessionInfo *out, int page_mode, int skip_policy) {
     const char *sid = get_cookie(SESSION_COOKIE_NAME);
 
     /* No cookie: reject without touching the DB (cheap path) */
@@ -43,16 +43,35 @@ static int gate_session(SessionInfo *out, int page_mode) {
         return 0;
     }
 
+    /* ADR-0002: expired/never-set password → forced change first.
+     * Everything except the change-password CGI is blocked here. */
+    if (!skip_policy && auth_user_must_change_password(s.user_id)) {
+        auth_cleanup();
+        if (page_mode) {
+            cgi_redirect("/change.html");
+        } else {
+            cgi_header("application/json; charset=utf-8");
+            printf("{\"status\":\"error\",\"message\":\"密码已过期,请先修改密码\"}");
+        }
+        return 0;
+    }
+
     if (out) *out = s;
     return 1;
 }
 
 int gate_json_session(SessionInfo *out) {
-    return gate_session(out, 0);
+    return gate_session(out, 0, 0);
 }
 
 int gate_page_session(SessionInfo *out) {
-    return gate_session(out, 1);
+    return gate_session(out, 1, 0);
+}
+
+/* Session gate that skips the forced-change check — only the
+ * change-password CGI may use this (ADR-0002). */
+int gate_json_session_no_policy(SessionInfo *out) {
+    return gate_session(out, 0, 1);
 }
 
 int gate_require_role(const SessionInfo *s, const char *role) {

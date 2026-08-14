@@ -791,3 +791,14 @@ button#sendBtn:disabled {
     border-color: #c45050;
     background: #fdf5f5;
 }
+
+/* ADR-0002: password expiry warning banner */
+.pass-expiry-banner {
+    color: #a07000;
+    background: rgba(255, 200, 60, 0.12);
+    border: 1px solid rgba(200, 150, 20, 0.35);
+    border-radius: 6px;
+    padding: 0.6rem 1rem;
+    margin-bottom: 1rem;
+    font-size: 0.9rem;
+}

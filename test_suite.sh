@@ -46,6 +46,19 @@ ROOT_SID=$(echo "$SETUP_RESP" | grep -o "session_id=[^;]*" | head -1)
 ROOT_CSRF=$(echo "$SETUP_RESP" | grep -o "csrf_token=[^;]*" | head -1)
 ROOT_CSRF_VAL=$(echo "$ROOT_CSRF" | sed 's/csrf_token=//')
 
+# ADR-0002: root 首登强制改密解锁。db_init 全新创建 root 时
+# password_changed_at=0(首次登录强制改密),写入当前时间解除,
+# 否则后续用例全部被 gate 拦到 /change.html。
+sshpass -p 'root' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$IP \
+    "python3 -c \"
+import sqlite3
+conn = sqlite3.connect('/var/db/myapp.db')
+conn.execute('PRAGMA wal_checkpoint(FULL)')
+conn.execute(\\\"UPDATE users SET password_changed_at=strftime('%s','now') WHERE role='root'\\\")
+conn.commit()
+conn.close()
+\"" 2>/dev/null || true
+
 # Delete leftover test users (ignore errors)
 curl -sk -b "$ROOT_SID; $ROOT_CSRF" \
     -d "user_id=2&csrf_token=$ROOT_CSRF_VAL" \
@@ -173,8 +186,9 @@ assert_contains "Root user in list" "root" "$RESP"
 
 # ── Test 14: Create admin user ──────────────────────────────────────
 echo "14. Create admin user"
+TEST_PASS="TestPass123!"   # 满足 ADR-0002 策略（10+ 四类）
 RESP=$(curl -sk -b "$SID; $CSRF_COOKIE" \
-    -d "username=$TEST_USER&password=test123456&csrf_token=$CSRF_VAL" \
+    -d "username=$TEST_USER&password=$TEST_PASS&csrf_token=$CSRF_VAL" \
     "https://$IP/cgi-bin/user_create.cgi" 2>&1)
 assert_status "User created" "ok" "$RESP"
 
@@ -200,11 +214,13 @@ assert_contains "Redirect after logout" "ocation: /index.html" "$RESP"
 
 # ── Test 18: Login as created admin user ────────────────────────────
 echo "18. Login as admin user"
-RESP=$(curl -sk -D - -X POST -d "user=$TEST_USER&pass=test123456" \
+RESP=$(curl -sk -D - -X POST -d "user=$TEST_USER&pass=$TEST_PASS" \
     https://$IP/cgi-bin/login.cgi 2>&1)
 assert_contains "Admin login OK" "session_id=" "$RESP"
 
 ADMIN_SID=$(echo "$RESP" | grep -o "session_id=[^;]*" | head -1)
+ADMIN_CSRF=$(echo "$RESP" | grep -o "csrf_token=[^;]*" | head -1)
+ADMIN_CSRF_VAL=$(echo "$ADMIN_CSRF" | sed 's/csrf_token=//')
 
 # ── Test 19: Admin cannot access root API ────────────────────────────
 echo "19. Admin cannot access root API"
@@ -215,6 +231,85 @@ assert_status "Admin forbidden" "error" "$RESP"
 echo "20. Admin can access normal CGI"
 RESP=$(curl -sk -b "$ADMIN_SID" https://$IP/cgi-bin/main.cgi 2>&1)
 assert_contains "Admin access OK" "Control Panel" "$RESP"
+
+# ── ADR-0002 密码策略用例（Test 21-27，自分支移植，修正 cookie 一致性）──
+
+# ── Test 21: Create user with weak password rejected ────────────────
+echo "21. Create user 弱密码拒绝"
+RESP=$(curl -sk -b "$SID; $CSRF_COOKIE" \
+    -d "username=weakuser&password=abc123&csrf_token=$CSRF_VAL" \
+    "https://$IP/cgi-bin/user_create.cgi" 2>&1)
+assert_status "弱密码拒绝" "error" "$RESP"
+
+# ── Test 22: Create user with Chinese chars rejected ────────────────
+echo "22. Create user 含中文密码拒绝"
+RESP=$(curl -sk -b "$SID; $CSRF_COOKIE" \
+    -d "username=cnuser&password=Abcd1234!中&csrf_token=$CSRF_VAL" \
+    "https://$IP/cgi-bin/user_create.cgi" 2>&1)
+assert_status "中文密码拒绝" "error" "$RESP"
+
+# ── Test 23: Self change with wrong old password rejected ───────────
+# (分支此处误用 root 的 $CSRF_COOKIE，移植时修正为 $ADMIN_CSRF)
+echo "23. 自改密旧密码错误拒绝"
+RESP=$(curl -sk -b "$ADMIN_SID; $ADMIN_CSRF" \
+    -d "old_password=wrongpass&new_password=Qwer5678!aa&csrf_token=$ADMIN_CSRF_VAL" \
+    "https://$IP/cgi-bin/user_change_pass.cgi" 2>&1)
+assert_status "旧密码错误拒绝" "error" "$RESP"
+
+# ── Test 24: Self change to same password rejected ──────────────────
+echo "24. 自改密与旧密码相同拒绝"
+RESP=$(curl -sk -b "$ADMIN_SID; $ADMIN_CSRF" \
+    -d "old_password=$TEST_PASS&new_password=$TEST_PASS&csrf_token=$ADMIN_CSRF_VAL" \
+    "https://$IP/cgi-bin/user_change_pass.cgi" 2>&1)
+assert_status "复用旧密码拒绝" "error" "$RESP"
+
+# ── Test 25: Self change ok + kicks other sessions ──────────────────
+echo "25. 自改密成功 + 踢其他会话"
+ADMIN2_RESP=$(curl -sk -D - -X POST -d "user=$TEST_USER&pass=$TEST_PASS" \
+    https://$IP/cgi-bin/login.cgi 2>&1)
+ADMIN2_SID=$(echo "$ADMIN2_RESP" | grep -o "session_id=[^;]*" | head -1)
+TEST_PASS2="Qwer5678!ab"
+RESP=$(curl -sk -b "$ADMIN_SID; $ADMIN_CSRF" \
+    -d "old_password=$TEST_PASS&new_password=$TEST_PASS2&csrf_token=$ADMIN_CSRF_VAL" \
+    "https://$IP/cgi-bin/user_change_pass.cgi" 2>&1)
+assert_status "改密成功" "ok" "$RESP"
+RESP=$(curl -sk -b "$ADMIN2_SID" "https://$IP/cgi-bin/network.cgi?action=get" 2>&1)
+assert_status "其他会话被踢" "error" "$RESP"
+RESP=$(curl -sk -b "$ADMIN_SID" "https://$IP/cgi-bin/network.cgi?action=get" 2>&1)
+assert_status "改密当前会话保留" "ok" "$RESP"
+
+# ── Test 26: Login with new password works ──────────────────────────
+echo "26. 新密码登录成功"
+RESP=$(curl -sk -D - -X POST -d "user=$TEST_USER&pass=$TEST_PASS2" \
+    https://$IP/cgi-bin/login.cgi 2>&1)
+assert_contains "新密码登录 OK" "session_id=" "$RESP"
+ADMIN_SID=$(echo "$RESP" | grep -o "session_id=[^;]*" | head -1)
+
+# ── Test 27: 到期强制改密（password_changed_at=0 模拟存量/到期）──────
+echo "27. 到期强制改密流程"
+sshpass -p 'root' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$IP \
+    "python3 -c \"
+import sqlite3
+conn = sqlite3.connect('/var/db/myapp.db')
+conn.execute('PRAGMA wal_checkpoint(FULL)')
+conn.execute(\\\"UPDATE users SET password_changed_at=0 WHERE username='$TEST_USER'\\\")
+conn.commit()
+conn.close()
+\"" 2>/dev/null || true
+RESP=$(curl -sk -D - -X POST -d "user=$TEST_USER&pass=$TEST_PASS2" \
+    https://$IP/cgi-bin/login.cgi 2>&1)
+assert_contains "到期登录 → change.html" "ocation: /change.html" "$RESP"
+ADMIN_SID=$(echo "$RESP" | grep -o "session_id=[^;]*" | head -1)
+CSRF_COOKIE=$(echo "$RESP" | grep -o "csrf_token=[^;]*" | head -1)
+CSRF_VAL=$(echo "$CSRF_COOKIE" | sed 's/csrf_token=//')
+RESP=$(curl -sk -b "$ADMIN_SID" "https://$IP/cgi-bin/network.cgi?action=get" 2>&1)
+assert_contains "到期期间拦截" "密码已过期" "$RESP"
+RESP=$(curl -sk -b "$ADMIN_SID; $CSRF_COOKIE" \
+    -d "old_password=$TEST_PASS2&new_password=$TEST_PASS&csrf_token=$CSRF_VAL" \
+    "https://$IP/cgi-bin/user_change_pass.cgi" 2>&1)
+assert_status "到期强制改密成功" "ok" "$RESP"
+RESP=$(curl -sk -b "$ADMIN_SID" "https://$IP/cgi-bin/network.cgi?action=get" 2>&1)
+assert_status "改密后功能恢复" "ok" "$RESP"
 
 # ── Summary ──────────────────────────────────────────────────────────
 echo ""

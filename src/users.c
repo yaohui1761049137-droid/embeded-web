@@ -21,8 +21,8 @@
 
 #define USERNAME_MIN 3
 #define USERNAME_MAX 32
-#define PASSWORD_MIN 6
-#define PASSWORD_MAX 64
+/* Password strength is enforced by auth_password_policy_ok() (ADR-0002):
+ * 10-64 chars, upper/lower/digit/ASCII-punct, no non-ASCII/space. */
 
 static void fail(char *err, size_t errlen, const char *msg) {
     if (err && errlen) snprintf(err, errlen, "%s", msg);
@@ -31,13 +31,12 @@ static void fail(char *err, size_t errlen, const char *msg) {
 int users_create(int actor_id, const char *username, const char *password,
                  char *err, size_t errlen) {
     size_t uname_len = username ? strlen(username) : 0;
-    size_t pass_len  = password ? strlen(password) : 0;
-    if (uname_len < USERNAME_MIN || uname_len > USERNAME_MAX ||
-        pass_len  < PASSWORD_MIN || pass_len  > PASSWORD_MAX) {
-        fail(err, errlen,
-             "Invalid parameters (username: 3-32 chars, password: 6-64 chars)");
+    if (uname_len < USERNAME_MIN || uname_len > USERNAME_MAX) {
+        fail(err, errlen, "Invalid parameters (username: 3-32 chars)");
         return -1;
     }
+    if (!password) { fail(err, errlen, "Invalid parameters"); return -1; }
+    if (!auth_password_policy_ok(password, err, (int)errlen)) return -1;
 
     char hash[256];
     if (auth_hash_password(password, hash, sizeof(hash)) != 0) {
@@ -52,7 +51,8 @@ int users_create(int actor_id, const char *username, const char *password,
     time_t now = time(NULL);
     const char *sql =
         "INSERT INTO users (username, password_hash, role, enabled, "
-        "created_at, updated_at, created_by) VALUES (?, ?, 'admin', 1, ?, ?, ?)";
+        "created_at, updated_at, created_by, password_changed_at) "
+        "VALUES (?, ?, 'admin', 1, ?, ?, ?, ?)";
 
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
         fail(err, errlen, "Database error");
@@ -63,6 +63,7 @@ int users_create(int actor_id, const char *username, const char *password,
     sqlite3_bind_int64(stmt, 3, (int64_t)now);
     sqlite3_bind_int64(stmt, 4, (int64_t)now);
     sqlite3_bind_int  (stmt, 5, actor_id);
+    sqlite3_bind_int64(stmt, 6, (int64_t)now);  /* policy-valid → timer starts */
 
     int rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
@@ -201,11 +202,8 @@ int users_toggle(int actor_id, int target_id, int enabled,
 
 int users_passwd(int actor_id, int target_id, const char *password,
                  char *err, size_t errlen) {
-    size_t pass_len = password ? strlen(password) : 0;
-    if (pass_len < PASSWORD_MIN || pass_len > PASSWORD_MAX) {
-        fail(err, errlen, "Invalid parameters");
-        return -1;
-    }
+    if (!password) { fail(err, errlen, "Invalid parameters"); return -1; }
+    if (!auth_password_policy_ok(password, err, (int)errlen)) return -1;
 
     char hash[256];
     if (auth_hash_password(password, hash, sizeof(hash)) != 0) {
@@ -219,14 +217,16 @@ int users_passwd(int actor_id, int target_id, const char *password,
     sqlite3_stmt *stmt;
     time_t now = time(NULL);
     const char *sql =
-        "UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?";
+        "UPDATE users SET password_hash = ?, password_changed_at = ?, "
+        "updated_at = ? WHERE id = ?";
     if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
         fail(err, errlen, "Database error");
         return -1;
     }
     sqlite3_bind_text (stmt, 1, hash, -1, SQLITE_STATIC);
     sqlite3_bind_int64(stmt, 2, (int64_t)now);
-    sqlite3_bind_int  (stmt, 3, target_id);
+    sqlite3_bind_int64(stmt, 3, (int64_t)now);
+    sqlite3_bind_int  (stmt, 4, target_id);
     int rc = sqlite3_step(stmt);
     int changes = sqlite3_changes(db);
     sqlite3_finalize(stmt);
@@ -236,7 +236,104 @@ int users_passwd(int actor_id, int target_id, const char *password,
         return -1;
     }
 
+    /* ADR-0002: reset restarts the 90-day timer and kills the target's
+     * other sessions (the reset password is unknown to them). */
+    auth_kick_user_sessions(target_id, NULL);
+
     auth_audit_log(actor_id, "reset_password", target_id, "",
+                   getenv("REMOTE_ADDR"));
+    return 0;
+}
+
+/* ADR-0002: self-service password change.  Verifies the current
+ * password, enforces the strong policy, refuses reuse of the current
+ * password (hash comparison), restarts the 90-day timer and kicks the
+ * user's other sessions (keep_sid — the current one — survives). */
+int users_change_password(int actor_id, const char *old_pass,
+                          const char *new_pass, const char *keep_sid,
+                          char *err, size_t errlen) {
+    if (actor_id <= 0 || !old_pass || !new_pass) {
+        fail(err, errlen, "Invalid parameters");
+        return -1;
+    }
+
+    sqlite3 *db = auth_db();
+    if (!db) { fail(err, errlen, "Database not open"); return -1; }
+
+    sqlite3_stmt *stmt;
+    char username[64] = "";
+
+    const char *name_sql = "SELECT username FROM users WHERE id = ?";
+    if (sqlite3_prepare_v2(db, name_sql, -1, &stmt, NULL) != SQLITE_OK) {
+        fail(err, errlen, "Database error");
+        return -1;
+    }
+    sqlite3_bind_int(stmt, 1, actor_id);
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        strncpy(username, (const char *)sqlite3_column_text(stmt, 0),
+                sizeof(username) - 1);
+    }
+    sqlite3_finalize(stmt);
+    if (!username[0]) { fail(err, errlen, "User not found"); return -1; }
+
+    /* Current password must match (anti session-hijack) */
+    if (auth_user_login(username, old_pass, NULL) < 0) {
+        fail(err, errlen, "当前密码不正确");
+        return -1;
+    }
+
+    if (!auth_password_policy_ok(new_pass, err, (int)errlen)) return -1;
+
+    /* No reuse: new password must differ from the stored hash */
+    const char *hash_sql = "SELECT password_hash FROM users WHERE id = ?";
+    if (sqlite3_prepare_v2(db, hash_sql, -1, &stmt, NULL) != SQLITE_OK) {
+        fail(err, errlen, "Database error");
+        return -1;
+    }
+    sqlite3_bind_int(stmt, 1, actor_id);
+    char old_hash[256] = "";
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        /* Copy before finalize: column_text memory dies with the stmt */
+        strncpy(old_hash, (const char *)sqlite3_column_text(stmt, 0),
+                sizeof(old_hash) - 1);
+    }
+    sqlite3_finalize(stmt);
+
+    if (auth_verify_password(new_pass, old_hash)) {
+        fail(err, errlen, "新密码不能与当前密码相同");
+        return -1;
+    }
+
+    char hash[256];
+    if (auth_hash_password(new_pass, hash, sizeof(hash)) != 0) {
+        fail(err, errlen, "Password hashing failed");
+        return -1;
+    }
+
+    time_t now = time(NULL);
+    const char *sql =
+        "UPDATE users SET password_hash = ?, password_changed_at = ?, "
+        "updated_at = ? WHERE id = ?";
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        fail(err, errlen, "Database error");
+        return -1;
+    }
+    sqlite3_bind_text (stmt, 1, hash, -1, SQLITE_STATIC);
+    sqlite3_bind_int64(stmt, 2, (int64_t)now);
+    sqlite3_bind_int64(stmt, 3, (int64_t)now);
+    sqlite3_bind_int  (stmt, 4, actor_id);
+    int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    if (rc != SQLITE_DONE) {
+        fail(err, errlen, "Database error");
+        return -1;
+    }
+
+    /* ADR-0002: other sessions die; the one that made the change stays */
+    auth_kick_user_sessions(actor_id, keep_sid);
+
+    auth_audit_log(actor_id, "change_password", actor_id, "",
                    getenv("REMOTE_ADDR"));
     return 0;
 }

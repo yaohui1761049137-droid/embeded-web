@@ -11,13 +11,17 @@ int main(void) {
     SessionInfo session;
     if (!gate_page_session(&session)) return 0;
 
+    /* ADR-0002: days until expiry for the warning banner (needs g_db) */
+    int days_left = auth_user_days_left(session.user_id);
+
     auth_cleanup();//断开数据库链接，省资源
 
     cgi_header("text/html; charset=utf-8");
 
     /* Inject current user info for frontend JS */
-    printf("<script>window._currentUser={id:%d,username:\"%s\",role:\"%s\",csrf:\"%s\"};</script>\n",
-           session.user_id, session.username, session.role, session.csrf_token);
+    printf("<script>window._currentUser={id:%d,username:\"%s\",role:\"%s\",csrf:\"%s\",daysLeft:%d};</script>\n",
+           session.user_id, session.username, session.role, session.csrf_token,
+           days_left);
 
     FILE *fp = fopen("/home/www/control_panel.html", "r");
     if (!fp) {

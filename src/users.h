@@ -4,7 +4,8 @@
  * live scattered across the five user_*.cgi files:
  *   - cannot delete self / cannot delete root
  *   - cannot disable self / cannot disable the last enabled root
- *   - username/password validation (3-32 / 6-64 chars)
+ *   - username validation (3-32 chars); password strength enforced by
+ *     auth_password_policy_ok (10-64 chars, 4 classes, ADR-0002)
  * Audit rows are written inside each mutating operation with the real
  * target_user_id (the old CGIs passed 0 for create, which silently
  * failed the audit_log FK constraint).
@@ -38,6 +39,14 @@ int users_toggle(int actor_id, int target_id, int enabled,
                  char *err, size_t errlen);
 int users_passwd(int actor_id, int target_id, const char *password,
                  char *err, size_t errlen);
+
+/* Self-service password change (ADR-0002): verifies the current
+ * password, enforces the policy, refuses reuse, restarts the 90-day
+ * timer and kicks the user's other sessions (keep_sid survives).
+ * Audit action: change_password. */
+int users_change_password(int actor_id, const char *old_pass,
+                          const char *new_pass, const char *keep_sid,
+                          char *err, size_t errlen);
 
 /* Fetch all users ordered by id.  Returns 0 on success; *out is a
  * caller-allocated array that must be freed with free(). */

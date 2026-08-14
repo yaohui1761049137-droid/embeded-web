@@ -45,16 +45,23 @@ int main(int argc, char **argv) {
 
     if (root_exists) {
         printf("Root user already exists. Updating password...\n");
-        const char *upd = "UPDATE users SET password_hash = ?, updated_at = ? WHERE role = 'root'";
+        /* ADR-0002: any modification restarts the 90-day timer */
+        const char *upd = "UPDATE users SET password_hash = ?, "
+                          "password_changed_at = ?, updated_at = ? "
+                          "WHERE role = 'root'";
         if (sqlite3_prepare_v2(db, upd, -1, &stmt, NULL) == SQLITE_OK) {
             sqlite3_bind_text (stmt, 1, hash, -1, SQLITE_STATIC);
             sqlite3_bind_int64(stmt, 2, (int64_t)now);
+            sqlite3_bind_int64(stmt, 3, (int64_t)now);
             int rc = sqlite3_step(stmt);
             sqlite3_finalize(stmt);
             printf("%s\n", rc == SQLITE_DONE ? "Root password updated." : "Update failed.");
         }
     } else {
         printf("Creating root user...\n");
+        /* password_changed_at stays 0 (column DEFAULT): the fresh root
+         * must change the (possibly weak) admin-provided password on
+         * first login — forced change (ADR-0002). */
         const char *ins =
             "INSERT INTO users (username, password_hash, role, enabled, "
             "created_at, updated_at) VALUES ('root', ?, 'root', 1, ?, ?)";

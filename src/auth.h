@@ -23,6 +23,12 @@
 #define PASSWORD_SALT_LEN  16    /* bytes for salt */
 #define PASSWORD_ROUNDS    100000 /* SHA-256 iterations */
 
+/* ── Password policy (ADR-0002) ──────────────────────────────────── */
+#define PASSWORD_MIN_LEN     10    /* strong policy minimum */
+#define PASSWORD_MAX_LEN     64    /* existing hard cap */
+#define PASSWORD_EXPIRE_DAYS 90    /* validity after each change */
+#define PASSWORD_WARN_DAYS    7    /* warn on login when ≤7 days left */
+
 /* ── Session info ────────────────────────────────────────────────── */
 typedef struct {
     int    user_id;
@@ -59,6 +65,22 @@ int  auth_verify_password(const char *password, const char *stored_hash);
 /* Verify login credentials.  Returns user_id on success, -1 on failure. */
 int  auth_user_login(const char *username, const char *password,
                      int *user_id_out);
+
+/* ── Password policy (ADR-0002) ──────────────────────────────────── */
+/* Validate password against strong policy (10-64 chars, one each of
+ * upper/lower/digit/ASCII-punct, no non-ASCII/space).  err gets a
+ * Chinese reason on failure (may be NULL).  Returns 1 if OK, 0 if not. */
+int  auth_password_policy_ok(const char *password, char *err, int err_max);
+
+/* 1 if user must change password on next login (never set, i.e. legacy
+ * account, or older than PASSWORD_EXPIRE_DAYS), 0 otherwise. */
+int  auth_user_must_change_password(int user_id);
+
+/* Days left until password expiry (0 if expired/never set), -1 if no user. */
+int  auth_user_days_left(int user_id);
+
+/* Delete all sessions of user_id except keep_sid (NULL = delete all). */
+void auth_kick_user_sessions(int user_id, const char *keep_sid);
 
 /* ── Permissions ─────────────────────────────────────────────────── */
 /* Check if session has a given role.  root has all permissions.

@@ -16,9 +16,33 @@
 function getCSRF() {
     return (window._currentUser && window._currentUser.csrf) || '';
 }
+
+/* ADR-0002: client-side password policy pre-check (UX only — backend enforces) */
+function policyError(pw) {
+    if (!pw) return '请输入密码';
+    if (pw.length < 10 || pw.length > 64) return '密码长度需为 10-64 个字符';
+    if (/[^ -~]/.test(pw)) return '密码只能包含 ASCII 可见字符(不允许中文、空格)';
+    if (!/[A-Z]/.test(pw)) return '密码需包含大写字母';
+    if (!/[a-z]/.test(pw)) return '密码需包含小写字母';
+    if (!/[0-9]/.test(pw)) return '密码需包含数字';
+    if (!/[^A-Za-z0-9]/.test(pw)) return '密码需包含特殊符号';
+    return '';
+}
 if (!document.cookie.match(/csrf_token=/)) {
     window.location.href = '/index.html';
 }
+
+/* ADR-0002: password expiry warning (daysLeft injected by main.cgi) */
+(function() {
+    var dl = window._currentUser && window._currentUser.daysLeft;
+    if (dl > 0 && dl <= 7) {
+        var el = document.getElementById('pass-expiry-banner');
+        if (el) {
+            el.textContent = '密码将于 ' + dl + ' 天后到期，请及时修改';
+            el.style.display = '';
+        }
+    }
+})();
 </script>
 
 <div class="app-layout">
@@ -34,11 +58,15 @@ if (!document.cookie.match(/csrf_token=/)) {
 <a data-tab="timesync" onclick="switchTab('timesync')">时间服务校验设置</a>
 <a data-tab="redundancy" onclick="switchTab('redundancy')">主备协同配置</a>
 	<a data-tab="usermgr" onclick="switchTab('usermgr');loadUserList()" id="nav-usermgr" style="display:none">用户管理</a>
+	<a href="/change.html">修改密码</a>
 	</div>
 </nav>
 
 <!-- Main content area -->
 <div class="main-content">
+
+<!-- ADR-0002: password expiry warning banner (visible on every tab) -->
+<div id="pass-expiry-banner" class="pass-expiry-banner" style="display:none"></div>
 
 <!-- Tab 1: 服务器状态查看 -->
 <div id="tab-status" class="tab-content active">
@@ -187,7 +215,7 @@ if (!document.cookie.match(/csrf_token=/)) {
 	<tr>
 	<td class="config-label">密码</td>
 	<td class="config-value">
-	<input type="password" id="new-user-pass" class="input-full" placeholder="6-64 个字符" maxlength="64" autocomplete="off">
+	<input type="password" id="new-user-pass" class="input-full" placeholder="10-64 个字符（含大小写、数字、特殊符号）" maxlength="64" autocomplete="off">
 	</td>
 	</tr>
 	</table>
@@ -669,8 +697,9 @@ function createUser() {
         setUserStatus('用户名至少 3 个字符', 'error');
         return;
     }
-    if (!pass || pass.length < 6) {
-        setUserStatus('密码至少 6 个字符', 'error');
+    var perr = policyError(pass);
+    if (perr) {
+        setUserStatus(perr, 'error');
         return;
     }
 
@@ -735,14 +764,11 @@ function toggleUser(id, enabled) {
 
 /* ── Reset Password ───────────────────────────────────────── */
 function resetPassword(id) {
-    var newPass = prompt('请输入新密码（6-64 个字符）：');
+    var newPass = prompt('请输入新密码（10-64 个字符，含大小写字母、数字和特殊符号）：');
     if (!newPass) return;
-    if (newPass.length < 6) {
-        setUserStatus('密码至少 6 个字符', 'error');
-        return;
-    }
-    if (newPass.length > 64) {
-        setUserStatus('密码最长 64 个字符', 'error');
+    var perr = policyError(newPass);
+    if (perr) {
+        setUserStatus(perr, 'error');
         return;
     }
 

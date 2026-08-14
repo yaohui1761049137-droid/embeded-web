@@ -8,13 +8,14 @@
 
 - **HTTPS 加密传输**（TLS 1.2+，HSTS，自签名证书）
 - **多用户认证**（root / admin 角色，SHA-256 密码哈希，10 万轮迭代）
+- **密码策略**（10-64 字符四类组合，90 天有效期，到期强制改密，用户自助改密）
 - **Session + CSRF 双重防护**（HttpOnly Cookie + CSRF Token）
 - **串口通信**（termios2 / BOTHER 自定义波特率，PING 预热 + 重试）
 - **多 Board 支持**（Web 控制面板一键切换，独立配置互不干扰）
 - **用户管理 API**（root 可创建/启用/禁用/删除 admin 用户，含审计日志）
 - **业务审计日志**（网络配置修改自动记录操作者和时间到 `audit_log` 表）
 - **SQLite 存储**（WAL 模式，多进程 CGI 并发安全）
-- **34 项自动化测试**（`test_suite.sh`，含 Board 2 和审计日志验证）
+- **46 项自动化测试**（`test_suite.sh`，含 Board 2 和审计日志验证）
 
 ## 架构
 
@@ -34,9 +35,9 @@
        ▼
 ┌──────────────────────────────┐      Serial /dev/ttyS7 (115200)  ┌──────────────────┐
 │  CGI Programs (C)            │      ──────────────────────────→ │  Board 1          │
-│  + gate.c (会话→角色→CSRF)   │      ←────────────────────────── │  handler.sh       │
-│  + auth.c (SQLite/审计)      │                                  │  192.168.8.201    │
-│  + users.c (用户管理)        │      Serial /dev/ttyS4 (38400)   └──────────────────┘
+│  + gate.c (门卫阶梯+强制改密)│      ←────────────────────────── │  handler.sh       │
+│  + auth.c (SQLite/审计/策略) │                                  │  192.168.8.201    │
+│  + users.c (用户管理/自改密) │      Serial /dev/ttyS4 (38400)   └──────────────────┘
 │  + remote.c (板表+协议)      │      ──────────────────────────→ ┌──────────────────┐
 │  + common.c (HTTP/串口/POST) │      ←────────────────────────── │  Board 2          │
 │                              │                                  │  handler.sh       │
@@ -64,7 +65,7 @@ embeded_Lighttpd/
 │   ├── sqlite3.h / sqlite3.c  SQLite3 amalgamation（单文件嵌入式数据库）
 │   ├── sha256.h / sha256.c    SHA-256 实现（密码哈希）
 │   ├── auth.h / auth.c        认证库（Session/User/CSRF/Audit）
-│   ├── gate.h / gate.c        CGI 请求门卫（session → role → CSRF 阶梯，统一错误输出）
+│   ├── gate.h / gate.c        CGI 请求门卫（session → role → CSRF 阶梯 + 强制改密，统一错误输出）
 │   ├── users.h / users.c      用户管理模块（业务不变量 + SQL + 审计，位于 gate 之上）
 │   ├── remote.h / remote.c    Remote Board 协议客户端（板表 + PING 预热 + 重试 + OK/ERR 文法）
 │   ├── common.h / common.c    CGI 公共库（HTTP/串口/POST 解析）
@@ -78,13 +79,16 @@ embeded_Lighttpd/
 │   ├── user_create.cgi.c      [root] 创建用户
 │   ├── user_passwd.cgi.c      [root] 重置密码
 │   ├── user_toggle.cgi.c      [root] 启用/禁用
-│   └── user_delete.cgi.c      [root] 删除用户
+│   ├── user_delete.cgi.c      [root] 删除用户
+│   └── user_change_pass.cgi.c 用户自改密（当前密码验证 + 策略 + 踢会话）
 ├── www/
 │   ├── index.html             登录页面
 │   ├── control_panel.html     控制面板（7 Tab，含 Board 1/2 切换）
+│   ├── change.html            修改密码页面（自改密入口）
 │   └── style.css              全局样式
+├── docs/adr/                  ADR 决策记录（0002 = 密码策略）
 ├── handler.sh                 Remote Board 串口协议处理脚本
-├── test_suite.sh              34 项端到端测试
+├── test_suite.sh              46 项端到端测试
 ├── test_gate.sh               宿主机门卫单测（CGI 级，无需板子）
 ├── test_users.c               宿主机用户模块单测（API 级，无需板子）
 ├── test_remote.c              宿主机协议客户端单测（API 级，pty 假板驱动）
@@ -150,7 +154,7 @@ ssh root@<board> '
   # 编译所有 CGI（统一命令）
   for src in login.cgi.c logout.cgi.c main.cgi.c network.cgi.c action.cgi.c \
              user_list.cgi.c user_create.cgi.c user_passwd.cgi.c \
-             user_toggle.cgi.c user_delete.cgi.c; do
+             user_toggle.cgi.c user_delete.cgi.c user_change_pass.cgi.c; do
     name=$(echo $src | sed "s/\.cgi\.c//" | sed "s/\.c//").cgi
     gcc -Wall -O2 -o $name $src common.c auth.c gate.c users.c remote.c sha256.c sqlite3.o -lpthread -ldl
   done
@@ -165,9 +169,20 @@ ssh root@<board> '
   cp *.cgi /home/www/cgi-bin/
   chown www-data:www-data /home/www/cgi-bin/*.cgi
   chmod 755 /home/www/cgi-bin/*.cgi
-  cp control_panel.html index.html style.css /home/www/
+  cp control_panel.html index.html style.css change.html /home/www/
 '
 ```
+
+### 密码策略与迁移（ADR-0002）
+
+- **全新部署**：`db_init admin` 创建的 root 处于「首次登录强制改密」状态——登录成功后会被
+  302 到 `/change.html`，改完密码（须满足策略）才能进入控制面板。root/admin 无豁免。
+- **存量升级**：旧库无需手动迁移——首个 CGI 进程运行时 auth_init 会自动
+  `ALTER TABLE users ADD COLUMN password_changed_at ... DEFAULT 0`，存量用户一律视为
+  已过期 → 首次登录强制改密（旧密码仍可登录，只是先改密）。
+- **重设密码**：root 密码过期时不会被锁死（登录 → 强制改密页）；若忘记密码，可重跑
+  `./db_init <新密码>`（root 已存在 → 更新密码并重置计时）。
+- **到期判定依赖板载时钟**（无 RTC 电池时重启时间错乱可能误判到期），不引入 NTP。
 
 ### 运行测试
 
@@ -204,7 +219,7 @@ ssh root@<board> '
 |------|------|
 | 传输 | TLS 1.2+，HTTP→HTTPS 强制跳转，HSTS |
 | 认证 | SHA-256 密码哈希（10 万轮 + 随机盐），`$5$` modular crypt 格式 |
-| Session | 64 字符随机 hex token，HttpOnly Cookie，1 小时过期 |
+| 密码策略 | 10-64 字符（大小写/数字/特殊符号四类），90 天有效期，到期强制改密，root 无豁免 |
 | CSRF | 双 Cookie：`session_id`(HttpOnly) + `csrf_token`(JS可读)，POST 需回传 |
 | 权限 | root/admin 角色分离，root 保护（不可自删/不可禁最后一个 root） |
 | 审计 | `audit_log` 表记录所有管理操作 |

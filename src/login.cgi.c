@@ -58,10 +58,14 @@ int main(void) {
         return 0;
     }
 
+    /* ADR-0002: password expired/never set → forced change first */
+    const char *dest = auth_user_must_change_password(user_id)
+        ? "/change.html" : "/cgi-bin/main.cgi";
+
     /* Dual cookies: session_id=HttpOnly, csrf_token=JS-readable */
     printf("Status: 302\r\n");
     gate_emit_session_cookies(sid, csrf);
-    printf("Location: /cgi-bin/main.cgi\r\n\r\n");
+    printf("Location: %s\r\n\r\n", dest);
 
     auth_cleanup();
     return 0;

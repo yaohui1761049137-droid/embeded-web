@@ -26,8 +26,13 @@ const char *gate_db_path(void);
 /* JSON mode: emits {"status":"error",...} on failure. Returns 1 ok, 0 failed. */
 int gate_json_session(SessionInfo *out);
 
-/* Page mode: emits 302 → /index.html on failure. Returns 1 ok, 0 failed. */
+/* Page mode: emits 302 → /index.html on failure (302 → /change.html when
+ * the session user must change password, ADR-0002). Returns 1 ok, 0 failed. */
 int gate_page_session(SessionInfo *out);
+
+/* JSON session gate that skips the forced-change check — only the
+ * change-password CGI may use this (ADR-0002). */
+int gate_json_session_no_policy(SessionInfo *out);
 
 /* Role ladder step: emits Forbidden JSON if session lacks the role. */
 int gate_require_role(const SessionInfo *s, const char *role);

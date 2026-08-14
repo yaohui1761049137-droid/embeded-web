@@ -6,7 +6,7 @@
 # 环境变量覆盖特性（默认 /var/db/myapp.db）。
 #
 # Usage: ./test_gate.sh [src_dir]
-# 依赖：宿主机 gcc（sqlite3.c 需 -lpthread -ldl），python3（可选，仅 DB 校验用）
+# 依赖：宿主机 gcc（sqlite3.c 需 -lpthread -ldl），python3（策略组到期模拟 + DB 校验用）
 
 set -e
 SRC="${1:-$(cd "$(dirname "$0")" && pwd)/src}"
@@ -42,7 +42,7 @@ echo "Compiling (host)…"
 gcc -Wall -O2 -c -DSQLITE_THREADSAFE=0 "$SRC/sqlite3.c" -o "$WORK/sqlite3.o"
 for src in login.cgi.c logout.cgi.c main.cgi.c network.cgi.c action.cgi.c \
            user_list.cgi.c user_create.cgi.c user_passwd.cgi.c \
-           user_toggle.cgi.c user_delete.cgi.c; do
+           user_toggle.cgi.c user_delete.cgi.c user_change_pass.cgi.c; do
     name=$(echo "$src" | sed 's/\.cgi\.c//').cgi
     gcc -Wall -O2 -o "$BIN/$name" "$SRC/$src" "$SRC/common.c" "$SRC/auth.c" \
         "$SRC/gate.c" "$SRC/users.c" "$SRC/remote.c" "$SRC/sha256.c" \
@@ -57,6 +57,10 @@ gcc -Wall -O2 -o "$BIN/test_remote" "$(dirname "$0")/test_remote.c" \
 echo ""
 
 # ── Seed temp DB (root / testpass123) ──────────────────────────────
+# ADR-0002: first db_init creates root with password_changed_at=0 (forced
+# change on first login). Second run hits the UPDATE branch → writes now,
+# unlocking root so Test 4 keeps asserting "Location: /cgi-bin/main.cgi".
+DB_PATH="$DB" "$BIN/db_init" testpass123 > /dev/null
 DB_PATH="$DB" "$BIN/db_init" testpass123 > /dev/null
 
 # ── Test 1: 无 cookie → JSON 错误（不碰数据库）──────────────────────
@@ -158,21 +162,21 @@ assert_contains "root in list" '"username":"root"' "$RESP"
 
 # ── Test 9: CSRF 缺失 → 拒绝 ────────────────────────────────────────
 echo "9. CSRF ladder: missing token"
-BODY="username=testadmin&password=test123456"
+BODY="username=testadmin&password=TestPass123!"
 RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
        REQUEST_METHOD=POST CONTENT_LENGTH=${#BODY} "$BIN/user_create.cgi")
 assert_contains "CSRF rejected" "CSRF token invalid" "$RESP"
 
 # ── Test 9b: CSRF 错误 → 拒绝 ───────────────────────────────────────
 echo "9b. CSRF ladder: wrong token"
-BODY="username=testadmin&password=test123456&csrf_token=deadbeef"
+BODY="username=testadmin&password=TestPass123!&csrf_token=deadbeef"
 RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
        REQUEST_METHOD=POST CONTENT_LENGTH=${#BODY} "$BIN/user_create.cgi")
 assert_contains "CSRF rejected" "CSRF token invalid" "$RESP"
 
 # ── Test 10: CSRF 有效 → 创建用户（校验入库）────────────────────────
 echo "10. CSRF ladder: valid token → user created"
-BODY="username=testadmin&password=test123456&csrf_token=$CSRF_VAL"
+BODY="username=testadmin&password=TestPass123!&csrf_token=$CSRF_VAL"
 RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
        REQUEST_METHOD=POST CONTENT_LENGTH=${#BODY} "$BIN/user_create.cgi")
 assert_contains "user created" '"status":"ok"' "$RESP"
@@ -190,7 +194,7 @@ fi
 
 # ── Test 11: admin 角色 → user_list 拒绝 ────────────────────────────
 echo "11. Role ladder: admin forbidden"
-BODY="user=testadmin&pass=test123456"
+BODY="user=testadmin&pass=TestPass123!"
 RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" REQUEST_METHOD=POST \
        CONTENT_LENGTH=${#BODY} REMOTE_ADDR=127.0.0.1 "$BIN/login.cgi")
 ADMIN_SID=$(echo "$RESP" | grep -o "session_id=[^;]*" | head -1)
@@ -261,6 +265,113 @@ assert_contains "csrf cleared" "csrf_token=;" "$RESP"
 echo "16. Session invalid after logout"
 RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID" "$BIN/main.cgi")
 assert_contains "redirect to index" "Location: /index.html" "$RESP"
+
+# ── ADR-0002 密码策略组（Test 17-26）─────────────────────────────────
+echo "17. Login root again (unlocked — goes to main, not change.html)"
+BODY="user=root&pass=testpass123"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" REQUEST_METHOD=POST \
+       CONTENT_LENGTH=${#BODY} REMOTE_ADDR=127.0.0.1 "$BIN/login.cgi")
+assert_contains "302 redirect" "Status: 302" "$RESP"
+assert_contains "to main.cgi" "Location: /cgi-bin/main.cgi" "$RESP"
+SID=$(echo "$RESP" | grep -o "session_id=[^;]*" | head -1)
+CSRF=$(echo "$RESP" | grep -o "csrf_token=[^;]*" | head -1)
+CSRF_VAL=$(echo "$CSRF" | sed 's/csrf_token=//')
+
+echo "18. Create user with policy-valid password"
+BODY="username=testadmin2&password=TestPass123!&csrf_token=$CSRF_VAL"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       REQUEST_METHOD=POST CONTENT_LENGTH=${#BODY} "$BIN/user_create.cgi")
+assert_contains "user created" '"status":"ok"' "$RESP"
+
+echo "19. Weak passwords refused by policy"
+BODY="username=weak1&password=Abc123!&csrf_token=$CSRF_VAL"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       REQUEST_METHOD=POST CONTENT_LENGTH=${#BODY} "$BIN/user_create.cgi")
+assert_contains "short password refused" "密码长度需为" "$RESP"
+BODY="username=weak2&password=abcdefghij&csrf_token=$CSRF_VAL"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       REQUEST_METHOD=POST CONTENT_LENGTH=${#BODY} "$BIN/user_create.cgi")
+assert_contains "letters-only refused" "密码需包含大写字母" "$RESP"
+
+echo "20. Non-ASCII password refused"
+BODY="username=weak3&password=Abcd1234!中&csrf_token=$CSRF_VAL"
+BLEN=$(printf '%s' "$BODY" | wc -c)   # UTF-8: bytes ≠ chars
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       REQUEST_METHOD=POST CONTENT_LENGTH=$BLEN "$BIN/user_create.cgi")
+assert_contains "non-ASCII refused" "密码只能包含 ASCII 可见字符" "$RESP"
+
+echo "21. Login testadmin2 → admin session (cookie-consistent)"
+BODY="user=testadmin2&pass=TestPass123!"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" REQUEST_METHOD=POST \
+       CONTENT_LENGTH=${#BODY} REMOTE_ADDR=127.0.0.1 "$BIN/login.cgi")
+assert_contains "to main.cgi" "Location: /cgi-bin/main.cgi" "$RESP"
+ADMIN_SID=$(echo "$RESP" | grep -o "session_id=[^;]*" | head -1)
+ADMIN_CSRF=$(echo "$RESP" | grep -o "csrf_token=[^;]*" | head -1)
+ADMIN_CSRF_VAL=$(echo "$ADMIN_CSRF" | sed 's/csrf_token=//')
+
+echo "22. Change password: wrong current password"
+BODY="old_password=WrongPass1!&new_password=NewPass123!&csrf_token=$ADMIN_CSRF_VAL"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$ADMIN_SID; $ADMIN_CSRF" \
+       REQUEST_METHOD=POST CONTENT_LENGTH=${#BODY} "$BIN/user_change_pass.cgi")
+assert_contains "current password rejected" "当前密码不正确" "$RESP"
+
+echo "23. Change password: reuse of current password refused"
+BODY="old_password=TestPass123!&new_password=TestPass123!&csrf_token=$ADMIN_CSRF_VAL"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$ADMIN_SID; $ADMIN_CSRF" \
+       REQUEST_METHOD=POST CONTENT_LENGTH=${#BODY} "$BIN/user_change_pass.cgi")
+assert_contains "reuse refused" "新密码不能与当前密码相同" "$RESP"
+
+echo "24. Self change: second session kicked, current survives"
+BODY="user=testadmin2&pass=TestPass123!"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" REQUEST_METHOD=POST \
+       CONTENT_LENGTH=${#BODY} "$BIN/login.cgi")
+SID2B=$(echo "$RESP" | grep -o "session_id=[^;]*" | head -1)
+CSRF2B=$(echo "$RESP" | grep -o "csrf_token=[^;]*" | head -1)
+BODY="old_password=TestPass123!&new_password=NewPass456!&csrf_token=$ADMIN_CSRF_VAL"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$ADMIN_SID; $ADMIN_CSRF" \
+       REQUEST_METHOD=POST CONTENT_LENGTH=${#BODY} "$BIN/user_change_pass.cgi")
+assert_contains "change ok" '"status":"ok"' "$RESP"
+RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID2B; $CSRF2B" \
+       QUERY_STRING="action=get" "$BIN/network.cgi")
+assert_contains "kicked session dead" "Not authenticated" "$RESP"
+RESP=$(DB_PATH="$DB" HTTP_COOKIE="$ADMIN_SID; $ADMIN_CSRF" \
+       QUERY_STRING="action=get" "$BIN/network.cgi")
+assert_contains "current session alive" "Cannot open serial port" "$RESP"
+
+echo "25. Login with new password"
+BODY="user=testadmin2&pass=NewPass456!"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" REQUEST_METHOD=POST \
+       CONTENT_LENGTH=${#BODY} "$BIN/login.cgi")
+assert_contains "302 redirect" "Status: 302" "$RESP"
+assert_contains "to main.cgi" "Location: /cgi-bin/main.cgi" "$RESP"
+
+echo "26. Expiry: forced change flow (gate blocks, change CGI exempt)"
+python3 - "$DB" <<'PY'
+import sqlite3, sys
+db = sys.argv[1]
+c = sqlite3.connect(db)
+c.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+c.execute("UPDATE users SET password_changed_at=0 WHERE username='testadmin2'")
+c.commit()
+PY
+BODY="user=testadmin2&pass=NewPass456!"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" REQUEST_METHOD=POST \
+       CONTENT_LENGTH=${#BODY} "$BIN/login.cgi")
+assert_contains "302 redirect" "Status: 302" "$RESP"
+assert_contains "to change.html" "Location: /change.html" "$RESP"
+EXP_SID=$(echo "$RESP" | grep -o "session_id=[^;]*" | head -1)
+EXP_CSRF=$(echo "$RESP" | grep -o "csrf_token=[^;]*" | head -1)
+EXP_CSRF_VAL=$(echo "$EXP_CSRF" | sed 's/csrf_token=//')
+RESP=$(DB_PATH="$DB" HTTP_COOKIE="$EXP_SID; $EXP_CSRF" \
+       QUERY_STRING="action=get" "$BIN/network.cgi")
+assert_contains "gate blocks expired user" "密码已过期,请先修改密码" "$RESP"
+BODY="old_password=NewPass456!&new_password=Recovered1!&csrf_token=$EXP_CSRF_VAL"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$EXP_SID; $EXP_CSRF" \
+       REQUEST_METHOD=POST CONTENT_LENGTH=${#BODY} "$BIN/user_change_pass.cgi")
+assert_contains "change ok" '"status":"ok"' "$RESP"
+RESP=$(DB_PATH="$DB" HTTP_COOKIE="$EXP_SID; $EXP_CSRF" \
+       QUERY_STRING="action=get" "$BIN/network.cgi")
+assert_contains "recovered, gate passes again" "Cannot open serial port" "$RESP"
 
 # ── Users module unit tests (direct API, offline) ──────────────────
 echo ""
