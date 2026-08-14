@@ -31,10 +31,8 @@ char *get_cookie(const char *name);
 #define SERIAL_DEVICE       "/dev/ttyFIQ0"
 #define CUSTOM_BAUD         1500000
 
-#define REMOTE_SERIAL_DEVICE   "/dev/ttyS7"
-#define REMOTE_SERIAL_DEVICE_2 "/dev/ttyS4"
-#define REMOTE_SERIAL_BAUD     115200
-#define REMOTE_SERIAL_BAUD_2   38400
+/* Remote Board devices/bauds live in the remote module's board table
+ * (src/remote.c) — the CGI used to pick them via port=s4 if/else. */
 
 int  serial_open(const char *device, unsigned int baudrate);
 int  serial_send(int fd, const char *data, int len);

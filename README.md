@@ -63,6 +63,7 @@ embeded_Lighttpd/
 │   ├── auth.h / auth.c        认证库（Session/User/CSRF/Audit）
 │   ├── gate.h / gate.c        CGI 请求门卫（session → role → CSRF 阶梯，统一错误输出）
 │   ├── users.h / users.c      用户管理模块（业务不变量 + SQL + 审计，位于 gate 之上）
+│   ├── remote.h / remote.c    Remote Board 协议客户端（板表 + PING 预热 + 重试 + OK/ERR 文法）
 │   ├── common.h / common.c    CGI 公共库（HTTP/串口/POST 解析）
 │   ├── login.cgi.c            登录（DB 验证 + 双 Cookie）
 │   ├── logout.cgi.c           登出（销毁 Session）
@@ -82,7 +83,9 @@ embeded_Lighttpd/
 ├── handler.sh                 Remote Board 串口协议处理脚本
 ├── test_suite.sh              34 项端到端测试
 ├── test_gate.sh               宿主机门卫单测（CGI 级，无需板子）
-└── test_users.c               宿主机用户模块单测（API 级，无需板子）
+├── test_users.c               宿主机用户模块单测（API 级，无需板子）
+├── test_remote.c              宿主机协议客户端单测（API 级，pty 假板驱动）
+└── test_fake_board.py         脚本化假 Remote Board（pty 协议仿真，供离线测试）
 ```
 
 ## 快速开始
@@ -136,15 +139,16 @@ scp src.tar.gz www/* root@<board>:/tmp/
 
 # 2. 编译
 ssh root@<board> '
-  cd /tmp && tar xzf src.tar.gz
-  gcc -c -O2 -DSQLITE_THREADSAFE=0 sqlite3.c -o sqlite3.o
+  cd /tmp && tar xzf src.tar.gz && cd src
+  # sqlite3.o 跨部署复用（tar 只含 .c/.h，不会被覆盖）
+  [ -f sqlite3.o ] || gcc -c -O2 -DSQLITE_THREADSAFE=0 sqlite3.c -o sqlite3.o
 
   # 编译所有 CGI（统一命令）
   for src in login.cgi.c logout.cgi.c main.cgi.c network.cgi.c action.cgi.c \
              user_list.cgi.c user_create.cgi.c user_passwd.cgi.c \
              user_toggle.cgi.c user_delete.cgi.c; do
     name=$(echo $src | sed "s/\.cgi\.c//" | sed "s/\.c//").cgi
-    gcc -Wall -O2 -o $name $src common.c auth.c gate.c users.c sha256.c sqlite3.o -lpthread -ldl
+    gcc -Wall -O2 -o $name $src common.c auth.c gate.c users.c remote.c sha256.c sqlite3.o -lpthread -ldl
   done
 
   # 初始化数据库
@@ -169,9 +173,13 @@ ssh root@<board> '
 ./test_gate.sh
 ```
 
-`test_gate.sh` 内置两层：CGI 级门卫测试（gate 阶梯 + 登录/登出 + 用户 CRUD 冒烟）与
-API 级用户模块测试（`test_users.c` 直接断言 users 模块的不变量：自删/删 root/禁最后
-root 拒绝、审计行 target_user_id 正确）。
+`test_gate.sh` 内置三层：
+- CGI 级门卫测试（gate 阶梯 + 登录/登出 + 用户 CRUD 冒烟）
+- API 级用户模块测试（`test_users.c` 直接断言 users 模块的不变量：自删/删 root/禁最后
+  root 拒绝、审计行 target_user_id 正确）
+- 串口离线测试：`test_remote.c` 通过 pty 假板（`test_fake_board.py`）驱动 remote 模块，
+  覆盖重试、超时、ERR、乱码响应与板表查表；`test_gate.sh` 内另有 4 项 network.cgi 冒烟
+  （`REMOTE_SERIAL_DEVICE_OVERRIDE` 指向 pty，端到端验证 JSON 形状与未知 port 拒绝）
 
 板端端到端测试（需 LubanCat + Remote Board 在线）：
 
@@ -181,6 +189,8 @@ root 拒绝、审计行 target_user_id 正确）。
 
 > 门卫模块（gate.c）读取 `DB_PATH` 环境变量覆盖数据库路径（默认 `/var/db/myapp.db`），
 > 使 CGI 二进制可在宿主机以受控环境变量离线运行——`test_gate.sh` 依赖此特性。
+> 同理，remote 模块读取 `REMOTE_SERIAL_DEVICE_OVERRIDE` 覆盖板子的串口设备路径，
+> 使串口测试可用 pty 假板离线进行。
 
 ## 安全模型
 
@@ -224,6 +234,9 @@ Set-Cookie: csrf_token=<32 hex>; Path=/; Secure; SameSite=Lax; Max-Age=3600
 | Board 2 | 192.168.8.99 | `/dev/ttyS4` | 38400 | `port=s4` |
 
 Web 控制面板中 Board 1/2 各自拥有独立表单，切换时互不覆盖。Board 3/4 预留位置。
+
+代码侧板表位于 `src/remote.c`（Board 3/4 = 表里加一行 + 前端表单 + 测试）；CGI 经
+`remote_board_lookup()` 查表，未知 port 返回错误而非静默落到 Board 1。
 
 ## Remote Board 部署
 

@@ -16,7 +16,10 @@ DB=$WORK/test.db
 PASS=0
 FAIL=0
 
-trap 'rm -rf "$WORK"' EXIT
+FAKE_PID=""
+# Cleanup must also kill the pty fake board: an orphaned fake keeps the
+# suite's stderr pipe open, which hangs any wrapper (tail) forever.
+trap 'if [ -n "$FAKE_PID" ]; then kill "$FAKE_PID" 2>/dev/null; wait "$FAKE_PID" 2>/dev/null || true; fi; rm -rf "$WORK"' EXIT
 
 green() { echo -e "\033[32m$1\033[0m"; }
 red()   { echo -e "\033[31m$1\033[0m"; }
@@ -42,12 +45,15 @@ for src in login.cgi.c logout.cgi.c main.cgi.c network.cgi.c action.cgi.c \
            user_toggle.cgi.c user_delete.cgi.c; do
     name=$(echo "$src" | sed 's/\.cgi\.c//').cgi
     gcc -Wall -O2 -o "$BIN/$name" "$SRC/$src" "$SRC/common.c" "$SRC/auth.c" \
-        "$SRC/gate.c" "$SRC/users.c" "$SRC/sha256.c" "$WORK/sqlite3.o" -lpthread -ldl
+        "$SRC/gate.c" "$SRC/users.c" "$SRC/remote.c" "$SRC/sha256.c" \
+        "$WORK/sqlite3.o" -lpthread -ldl
 done
 gcc -Wall -O2 -o "$BIN/db_init" "$SRC/db_init.c" "$SRC/auth.c" "$SRC/gate.c" \
     "$SRC/common.c" "$SRC/sha256.c" "$WORK/sqlite3.o" -lpthread -ldl
 gcc -Wall -O2 -o "$BIN/test_users" "$(dirname "$0")/test_users.c" \
     "$SRC/users.c" "$SRC/auth.c" "$SRC/sha256.c" "$WORK/sqlite3.o" -lpthread -ldl
+gcc -Wall -O2 -o "$BIN/test_remote" "$(dirname "$0")/test_remote.c" \
+    "$SRC/remote.c" "$SRC/common.c"
 echo ""
 
 # ── Seed temp DB (root / testpass123) ──────────────────────────────
@@ -104,6 +110,45 @@ echo "7. JSON gate: valid session (reaches serial layer)"
 RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
        QUERY_STRING="action=get" "$BIN/network.cgi")
 assert_contains "gate passed (serial error, not auth)" "Cannot open serial port" "$RESP"
+
+# ── Test 7b-7d: network.cgi against pty fake board (offline serial) ──
+FAKE_OUT=$WORK/fake_slave
+python3 "$(dirname "$0")/test_fake_board.py" ok "$WORK/fake.log" > "$FAKE_OUT" &
+FAKE_PID=$!
+while [ ! -s "$FAKE_OUT" ]; do sleep 0.05; done
+FAKE_DEV=$(head -1 "$FAKE_OUT")
+
+echo "7b. network.cgi GET against fake board (pty)"
+RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       REMOTE_SERIAL_DEVICE_OVERRIDE="$FAKE_DEV" \
+       QUERY_STRING="action=get" "$BIN/network.cgi")
+assert_contains "status ok" '"status":"ok"' "$RESP"
+assert_contains "fake ipv4 parsed end-to-end" '"ip":"10.0.0.1"' "$RESP"
+
+echo "7c. network.cgi SET against fake board (pty, valid CSRF)"
+BODY="ip=192.168.8.99&mask=255.255.255.0&gateway=192.168.8.1&ipv6=&csrf_token=$CSRF_VAL"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       REMOTE_SERIAL_DEVICE_OVERRIDE="$FAKE_DEV" \
+       QUERY_STRING="action=set" \
+       REQUEST_METHOD=POST CONTENT_LENGTH=${#BODY} "$BIN/network.cgi")
+assert_contains "configure ok" '"status":"ok"' "$RESP"
+assert_contains "save message" "保存成功" "$RESP"
+
+echo "7d. Unknown board port rejected"
+RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       REMOTE_SERIAL_DEVICE_OVERRIDE="$FAKE_DEV" \
+       QUERY_STRING="action=get&port=zz" "$BIN/network.cgi")
+assert_contains "invalid board" "Invalid board" "$RESP"
+
+echo "7e. Board 2 (port=s4) via fake board"
+RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       REMOTE_SERIAL_DEVICE_OVERRIDE="$FAKE_DEV" \
+       QUERY_STRING="action=get&port=s4" "$BIN/network.cgi")
+assert_contains "board 2 query ok" '"status":"ok"' "$RESP"
+assert_contains "board 2 ipv4" '"ip":"10.0.0.1"' "$RESP"
+kill "$FAKE_PID" 2>/dev/null
+wait "$FAKE_PID" 2>/dev/null || true
+FAKE_PID=""
 
 # ── Test 8: root 角色 → user_list 放行 ──────────────────────────────
 echo "8. Role ladder: root allowed"
@@ -229,6 +274,21 @@ if [ $TU_RC -ne 0 ]; then
     FAIL=$((FAIL + 1))
 else
     green "  ✅ users module tests passed"
+    PASS=$((PASS + 1))
+fi
+
+# ── Remote module unit tests (pty fake board, offline) ─────────────
+echo ""
+echo "── Remote module unit tests ──"
+set +e
+"$BIN/test_remote" "$(dirname "$0")/test_fake_board.py"
+TR_RC=$?
+set -e
+if [ $TR_RC -ne 0 ]; then
+    red "  ❌ remote module tests failed (rc=$TR_RC)"
+    FAIL=$((FAIL + 1))
+else
+    green "  ✅ remote module tests passed"
     PASS=$((PASS + 1))
 fi
 
