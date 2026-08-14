@@ -7,10 +7,10 @@
  */
 #include "common.h"
 #include "auth.h"
+#include "gate.h"
 #include <termios.h>
 #include <sys/select.h>
 
-#define DB_PATH         "/var/db/myapp.db"
 #define CMD_TIMEOUT_MS  2000
 #define RESP_BUF        256
 
@@ -155,17 +155,9 @@ static int handle_set(const char *serial_dev, unsigned int baud) {
 /* ── Entry point ─────────────────────────────────────────────────── */
 
 int main(void) {
-    auth_init(DB_PATH);
-
-    /* Session check */
-    const char *sid = get_cookie(SESSION_COOKIE_NAME);
+    /* Request gate: cookie → session verify (emits error JSON on failure) */
     SessionInfo session;
-    if (!sid || !auth_session_verify(sid, &session)) {
-        cgi_header("application/json");
-        printf("{\"status\":\"error\",\"message\":\"Not authenticated\"}");
-        auth_cleanup();
-        return 0;
-    }
+    if (!gate_json_session(&session)) return 0;
 
     /* Parse action & port */
     const char *qs = get_env("QUERY_STRING");
@@ -199,12 +191,10 @@ int main(void) {
         return handle_get(serial_dev, baud);
     }
 
-    /* For "set": CSRF check FIRST (before POST params consumed by handle_set) */
+    /* For "set": CSRF check before any side effect (serial writes) */
     if (strcmp(action, "set") == 0) {
         const char *csrf = get_post_param("csrf_token");
-        if (!csrf || !auth_csrf_verify(&session, csrf)) {
-            cgi_header("application/json");
-            printf("{\"status\":\"error\",\"message\":\"CSRF token invalid\"}");
+        if (!gate_require_csrf(&session, csrf)) {
             auth_cleanup();
             return 0;
         }

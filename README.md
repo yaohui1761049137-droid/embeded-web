@@ -61,6 +61,8 @@ embeded_Lighttpd/
 │   ├── sqlite3.h / sqlite3.c  SQLite3 amalgamation（单文件嵌入式数据库）
 │   ├── sha256.h / sha256.c    SHA-256 实现（密码哈希）
 │   ├── auth.h / auth.c        认证库（Session/User/CSRF/Audit）
+│   ├── gate.h / gate.c        CGI 请求门卫（session → role → CSRF 阶梯，统一错误输出）
+│   ├── users.h / users.c      用户管理模块（业务不变量 + SQL + 审计，位于 gate 之上）
 │   ├── common.h / common.c    CGI 公共库（HTTP/串口/POST 解析）
 │   ├── login.cgi.c            登录（DB 验证 + 双 Cookie）
 │   ├── logout.cgi.c           登出（销毁 Session）
@@ -78,7 +80,9 @@ embeded_Lighttpd/
 │   ├── control_panel.html     控制面板（7 Tab，含 Board 1/2 切换）
 │   └── style.css              全局样式
 ├── handler.sh                 Remote Board 串口协议处理脚本
-└── test_suite.sh              34 项端到端测试
+├── test_suite.sh              34 项端到端测试
+├── test_gate.sh               宿主机门卫单测（CGI 级，无需板子）
+└── test_users.c               宿主机用户模块单测（API 级，无需板子）
 ```
 
 ## 快速开始
@@ -140,11 +144,11 @@ ssh root@<board> '
              user_list.cgi.c user_create.cgi.c user_passwd.cgi.c \
              user_toggle.cgi.c user_delete.cgi.c; do
     name=$(echo $src | sed "s/\.cgi\.c//" | sed "s/\.c//").cgi
-    gcc -Wall -O2 -o $name $src common.c auth.c sha256.c sqlite3.o -lpthread
+    gcc -Wall -O2 -o $name $src common.c auth.c gate.c users.c sha256.c sqlite3.o -lpthread -ldl
   done
 
   # 初始化数据库
-  gcc -Wall -O2 -o db_init db_init.c auth.c sha256.c sqlite3.o -lpthread
+  gcc -Wall -O2 -o db_init db_init.c auth.c gate.c common.c sha256.c sqlite3.o -lpthread -ldl
   mkdir -p /var/db
   ./db_init admin
   chown -R www-data:www-data /var/db
@@ -159,9 +163,24 @@ ssh root@<board> '
 
 ### 运行测试
 
+宿主机单测（无需板子，x86_64 gcc 编译 + 临时 SQLite 库）：
+
+```bash
+./test_gate.sh
+```
+
+`test_gate.sh` 内置两层：CGI 级门卫测试（gate 阶梯 + 登录/登出 + 用户 CRUD 冒烟）与
+API 级用户模块测试（`test_users.c` 直接断言 users 模块的不变量：自删/删 root/禁最后
+root 拒绝、审计行 target_user_id 正确）。
+
+板端端到端测试（需 LubanCat + Remote Board 在线）：
+
 ```bash
 ./test_suite.sh <board_ip>
 ```
+
+> 门卫模块（gate.c）读取 `DB_PATH` 环境变量覆盖数据库路径（默认 `/var/db/myapp.db`），
+> 使 CGI 二进制可在宿主机以受控环境变量离线运行——`test_gate.sh` 依赖此特性。
 
 ## 安全模型
 

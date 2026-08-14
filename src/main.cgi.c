@@ -3,25 +3,13 @@
  */
 #include "common.h"
 #include "auth.h"
-
-#define DB_PATH "/var/db/myapp.db"
+#include "gate.h"
 
 int main(void) {
-    char *sid = get_cookie(SESSION_COOKIE_NAME);
-
-    if (!sid) {
-        cgi_redirect("/index.html");
-        return 0;
-    }
-
-    auth_init(DB_PATH);
-
+    /* Request gate (page mode): emits 302 → /index.html on failure.
+     * No cookie → reject without touching the DB (cheap path preserved). */
     SessionInfo session;
-    if (!auth_session_verify(sid, &session)) {
-        auth_cleanup();
-        cgi_redirect("/index.html");
-        return 0;
-    }
+    if (!gate_page_session(&session)) return 0;
 
     auth_cleanup();//断开数据库链接，省资源
 

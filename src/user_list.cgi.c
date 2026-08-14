@@ -1,63 +1,38 @@
-/* user_list.cgi — Phase 2: list all users (root only)
- * GET: returns JSON array of users (excludes password_hash).
+/* user_list.cgi — [root] list users (GET)
+ * Returns JSON array of users (excludes password_hash).
  */
 #include "common.h"
 #include "auth.h"
-#include "sqlite3.h"
-
-#define DB_PATH "/var/db/myapp.db"
+#include "gate.h"
+#include "users.h"
 
 int main(void) {
-    auth_init(DB_PATH);
-
-    /* Auth */
-    const char *sid = get_cookie(SESSION_COOKIE_NAME);
+    /* Request gate: session → role ladder (emits errors on failure) */
     SessionInfo session;
-    if (!sid || !auth_session_verify(sid, &session)) {
-        cgi_header("application/json");
-        printf("{\"status\":\"error\",\"message\":\"Not authenticated\"}");
+    if (!gate_json_session(&session)) return 0;
+
+    if (!gate_require_role(&session, "root")) {
         auth_cleanup();
         return 0;
     }
 
-    if (!auth_require_role(&session, "root")) {
-        cgi_header("application/json");
-        printf("{\"status\":\"error\",\"message\":\"Forbidden\"}");
-        auth_cleanup();
-        return 0;
-    }
-
-    /* Query users */
-    sqlite3 *mydb;
-    sqlite3_open(DB_PATH, &mydb);
-    sqlite3_stmt *stmt;
-
-    const char *sql =
-        "SELECT id, username, role, enabled, created_at, last_login_at "
-        "FROM users ORDER BY id";
+    UserRow *rows = NULL;
+    int n = 0;
 
     cgi_header("application/json; charset=utf-8");
     printf("{\"status\":\"ok\",\"users\":[");
-
-    if (sqlite3_prepare_v2(mydb, sql, -1, &stmt, NULL) == SQLITE_OK) {
-        int first = 1;
-        while (sqlite3_step(stmt) == SQLITE_ROW) {
-            if (!first) printf(",");
+    if (users_fetch_all(&rows, &n) == 0) {
+        for (int i = 0; i < n; i++) {
+            if (i) printf(",");
             printf("{\"id\":%d,\"username\":\"%s\",\"role\":\"%s\","
                    "\"enabled\":%d,\"created_at\":%lld,\"last_login_at\":%lld}",
-                   sqlite3_column_int(stmt, 0),
-                   sqlite3_column_text(stmt, 1),
-                   sqlite3_column_text(stmt, 2),
-                   sqlite3_column_int(stmt, 3),
-                   (long long)sqlite3_column_int64(stmt, 4),
-                   (long long)sqlite3_column_int64(stmt, 5));
-            first = 0;
+                   rows[i].id, rows[i].username, rows[i].role, rows[i].enabled,
+                   (long long)rows[i].created_at, (long long)rows[i].last_login_at);
         }
-        sqlite3_finalize(stmt);
     }
-
     printf("]}");
-    sqlite3_close(mydb);
+    free(rows);
+
     auth_cleanup();
     return 0;
 }

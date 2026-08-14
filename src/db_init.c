@@ -6,20 +6,19 @@
  * Compile: gcc -Wall -O2 -o db_init db_init.c auth.c sqlite3.c sha256.c -lpthread -ldl
  */
 #include "auth.h"
+#include "gate.h"
 #include "sqlite3.h"
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
 
-#define DB_PATH "/var/db/myapp.db"
-
 int main(int argc, char **argv) {
     const char *password = (argc > 1) ? argv[1] : "admin";
     char hash[256];
 
-    printf("Initializing database: %s\n", DB_PATH);
+    printf("Initializing database: %s\n", gate_db_path());
 
-    if (auth_init(DB_PATH) != 0) {
+    if (auth_init(gate_db_path()) != 0) {
         fprintf(stderr, "ERROR: cannot open/create database\n");
         return 1;
     }
@@ -32,7 +31,7 @@ int main(int argc, char **argv) {
 
     /* Check if root user already exists */
     sqlite3 *db;
-    sqlite3_open(DB_PATH, &db);
+    sqlite3_open(gate_db_path(), &db);
     sqlite3_stmt *stmt;
     int root_exists = 0;
     time_t now = time(NULL);

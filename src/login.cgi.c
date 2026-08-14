@@ -5,28 +5,29 @@
  */
 #include "common.h"
 #include "auth.h"
-
-#define DB_PATH "/var/db/myapp.db"
+#include "gate.h"
 
 int main(void) {
     const char *method = get_env("REQUEST_METHOD");
 
-    auth_init(DB_PATH);
-
     /* ── GET: check if already logged in ────────────────────────── */
     if (strcmp(method, "POST") != 0) {
-        const char *sid = get_cookie(SESSION_COOKIE_NAME);
         SessionInfo session;
-        if (sid && auth_session_verify(sid, &session)) {
+        if (gate_page_session(&session)) {
+            auth_cleanup();
             cgi_redirect("/cgi-bin/main.cgi");
-        } else {
-            cgi_redirect("/index.html");
         }
-        auth_cleanup();
+        /* 未登录：gate 已重定向到 /index.html */
         return 0;
     }
 
     /* ── POST: process login ────────────────────────────────────── */
+    if (auth_init(gate_db_path()) != 0) {
+        cgi_header("application/json; charset=utf-8");
+        printf("{\"status\":\"error\",\"message\":\"Database error\"}");
+        return 0;
+    }
+
     char *user = get_post_param("user");
     char *pass = get_post_param("pass");
 
@@ -59,12 +60,7 @@ int main(void) {
 
     /* Dual cookies: session_id=HttpOnly, csrf_token=JS-readable */
     printf("Status: 302\r\n");
-    printf("Set-Cookie: %s=%s; Path=/; HttpOnly; Secure; "
-           "SameSite=Lax; Max-Age=%d\r\n",
-           SESSION_COOKIE_NAME, sid, SESSION_EXPIRE);
-    printf("Set-Cookie: csrf_token=%s; Path=/; Secure; "
-           "SameSite=Lax; Max-Age=%d\r\n",
-           csrf, SESSION_EXPIRE);
+    gate_emit_session_cookies(sid, csrf);
     printf("Location: /cgi-bin/main.cgi\r\n\r\n");
 
     auth_cleanup();

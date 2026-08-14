@@ -3,27 +3,12 @@
  */
 #include "common.h"
 #include "auth.h"
-
-#define DB_PATH "/var/db/myapp.db"
+#include "gate.h"
 
 int main(void) {
-    const char *sid = get_cookie(SESSION_COOKIE_NAME);
-
-    if (!sid) {
-        cgi_header("application/json");
-        printf("{\"status\":\"error\",\"message\":\"Not authenticated\"}");
-        return 0;
-    }
-
-    auth_init(DB_PATH);
-
+    /* Request gate: emits error JSON on failure, cleans up itself */
     SessionInfo session;
-    if (!auth_session_verify(sid, &session)) {
-        cgi_header("application/json");
-        printf("{\"status\":\"error\",\"message\":\"Not authenticated\"}");
-        auth_cleanup();
-        return 0;
-    }
+    if (!gate_json_session(&session)) return 0;
 
     auth_cleanup();
 

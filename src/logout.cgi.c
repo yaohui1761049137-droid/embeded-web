@@ -1,11 +1,10 @@
 /* logout.cgi — Phase 2: destroy DB session, clear both cookies */
 #include "common.h"
 #include "auth.h"
-
-#define DB_PATH "/var/db/myapp.db"
+#include "gate.h"
 
 int main(void) {
-    auth_init(DB_PATH);
+    auth_init(gate_db_path());
 
     char *sid = get_cookie(SESSION_COOKIE_NAME);
     if (sid) {
@@ -16,10 +15,7 @@ int main(void) {
 
     /* Clear both cookies */
     printf("Status: 302\r\n");
-    printf("Set-Cookie: %s=; Path=/; HttpOnly; Secure; SameSite=Lax; "
-           "Max-Age=0\r\n", SESSION_COOKIE_NAME);
-    printf("Set-Cookie: csrf_token=; Path=/; Secure; SameSite=Lax; "
-           "Max-Age=0\r\n");
+    gate_emit_session_cookies(NULL, NULL);
     printf("Location: /index.html\r\n\r\n");
     return 0;
 }

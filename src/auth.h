@@ -14,6 +14,7 @@
 
 #include <stdint.h>
 #include <time.h>
+#include "sqlite3.h"
 
 /* ── Token lengths ──────────────────────────────────────────────── */
 #define SESSION_ID_LEN     64    /* hex encoded, 32 bytes from urandom */
@@ -33,6 +34,11 @@ typedef struct {
 /* ── Database ────────────────────────────────────────────────────── */
 int  auth_init(const char *db_path);
 void auth_cleanup(void);
+
+/* Return the open database handle (NULL if auth_init not called).
+ * Lets sibling modules (users.c) operate on the same connection
+ * instead of opening a second one. */
+sqlite3 *auth_db(void);
 
 /* ── Session ─────────────────────────────────────────────────────── */
 int  auth_session_create(int user_id, const char *client_ip,

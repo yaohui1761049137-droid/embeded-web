@@ -21,6 +21,8 @@
 static sqlite3 *g_db = NULL;
 static char     g_db_path[256] = {0};
 
+static void migrate_delete_fks(sqlite3 *db);
+
 /* ── Database init / cleanup ──────────────────────────────────────── */
 
 int auth_init(const char *db_path) {
@@ -71,7 +73,7 @@ int auth_init(const char *db_path) {
         "  created_at    INTEGER NOT NULL,"
         "  expires_at    INTEGER NOT NULL,"
         "  client_ip     TEXT,"
-        "  FOREIGN KEY (user_id) REFERENCES users(id)"
+        "  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
         ");"
         "CREATE TABLE IF NOT EXISTS audit_log ("
         "  id            INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -81,8 +83,8 @@ int auth_init(const char *db_path) {
         "  detail        TEXT,"
         "  client_ip     TEXT,"
         "  created_at    INTEGER NOT NULL,"
-        "  FOREIGN KEY (operator_id)    REFERENCES users(id),"
-        "  FOREIGN KEY (target_user_id) REFERENCES users(id)"
+        "  FOREIGN KEY (operator_id)    REFERENCES users(id) ON DELETE SET NULL,"
+        "  FOREIGN KEY (target_user_id) REFERENCES users(id) ON DELETE SET NULL"
         ");";
 
     rc = sqlite3_exec(g_db, sql, NULL, NULL, NULL);
@@ -93,7 +95,90 @@ int auth_init(const char *db_path) {
         return -1;
     }
 
+    migrate_delete_fks(g_db);
+
     return 0;
+}
+
+/* ── Schema migration ─────────────────────────────────────────────── */
+
+/* v1 schema declared audit_log/sessions FKs without ON DELETE actions,
+ * so deleting a user with audit history or live sessions was blocked
+ * by the FK constraints (user_delete silently failed).  Rebuild those
+ * tables with proper delete actions when the old schema is detected:
+ * audit history survives with NULL target, sessions are cascaded.
+ * Runs once — after the rebuild the PRAGMA no longer matches. */
+static void migrate_delete_fks(sqlite3 *db) {
+    /* PRAGMA foreign_key_list columns: id, seq, table, from, to,
+     * on_update, on_delete, match */
+    sqlite3_stmt *stmt;
+    int audit_needs = 0, sess_needs = 0;
+    const char *sql = "PRAGMA foreign_key_list(audit_log)";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char *tbl = (const char *)sqlite3_column_text(stmt, 2);
+            const char *od  = (const char *)sqlite3_column_text(stmt, 6);
+            if (tbl && strcmp(tbl, "users") == 0 &&
+                (!od || strcmp(od, "SET NULL") != 0))
+                audit_needs = 1;
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    sql = "PRAGMA foreign_key_list(sessions)";
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) == SQLITE_OK) {
+        while (sqlite3_step(stmt) == SQLITE_ROW) {
+            const char *tbl = (const char *)sqlite3_column_text(stmt, 2);
+            const char *od  = (const char *)sqlite3_column_text(stmt, 6);
+            if (tbl && strcmp(tbl, "users") == 0 &&
+                (!od || strcmp(od, "CASCADE") != 0))
+                sess_needs = 1;
+        }
+        sqlite3_finalize(stmt);
+    }
+
+    if (audit_needs) {
+        sqlite3_exec(db, "BEGIN;", NULL, NULL, NULL);
+        sqlite3_exec(db,
+            "CREATE TABLE audit_log_v2 ("
+            "  id            INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  operator_id   INTEGER,"
+            "  action        TEXT    NOT NULL,"
+            "  target_user_id INTEGER,"
+            "  detail        TEXT,"
+            "  client_ip     TEXT,"
+            "  created_at    INTEGER NOT NULL,"
+            "  FOREIGN KEY (operator_id)    REFERENCES users(id) ON DELETE SET NULL,"
+            "  FOREIGN KEY (target_user_id) REFERENCES users(id) ON DELETE SET NULL"
+            ");"
+            "INSERT INTO audit_log_v2 SELECT id, operator_id, action, "
+            "target_user_id, detail, client_ip, created_at FROM audit_log;"
+            "DROP TABLE audit_log;"
+            "ALTER TABLE audit_log_v2 RENAME TO audit_log;",
+            NULL, NULL, NULL);
+        sqlite3_exec(db, "COMMIT;", NULL, NULL, NULL);
+    }
+
+    if (sess_needs) {
+        sqlite3_exec(db, "BEGIN;", NULL, NULL, NULL);
+        sqlite3_exec(db,
+            "CREATE TABLE sessions_v2 ("
+            "  sid           TEXT    PRIMARY KEY,"
+            "  user_id       INTEGER NOT NULL,"
+            "  csrf_token    TEXT    NOT NULL,"
+            "  created_at    INTEGER NOT NULL,"
+            "  expires_at    INTEGER NOT NULL,"
+            "  client_ip     TEXT,"
+            "  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+            ");"
+            "INSERT INTO sessions_v2 SELECT sid, user_id, csrf_token, "
+            "created_at, expires_at, client_ip FROM sessions;"
+            "DROP TABLE sessions;"
+            "ALTER TABLE sessions_v2 RENAME TO sessions;",
+            NULL, NULL, NULL);
+        sqlite3_exec(db, "COMMIT;", NULL, NULL, NULL);
+    }
 }
 
 void auth_cleanup(void) {
@@ -104,6 +189,10 @@ void auth_cleanup(void) {
         g_db = NULL;
         g_db_path[0] = '\0';
     }
+}
+
+sqlite3 *auth_db(void) {
+    return g_db;
 }
 
 /* ── Token generation ────────────────────────────────────────────── */
