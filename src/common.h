@@ -20,7 +20,6 @@
 /* ── HTTP helpers ─────────────────────────────────────────────────── */
 void cgi_header(const char *content_type);
 void cgi_redirect(const char *url);
-void cgi_error(const char *msg);
 char *get_env(const char *key);
 
 /* Parse Cookie header to get a specific cookie value.
@@ -45,8 +44,8 @@ int  serial_read_line(int fd, char *buf, int max_len, int timeout_ms);
 
 /* ── POST body parsing ────────────────────────────────────────────── */
 /* Extract a parameter value from POST body (x-www-form-urlencoded).
- * Uses rotating pool of 6 buffers (up from 4) to handle CSRF token
- * plus network.cgi's 4 params without overwrite. */
+ * Returns a freshly allocated URL-decoded copy, or NULL if the param
+ * is absent. The copy is never freed (CGI process exits at request end). */
 char *get_post_param(const char *param_name);
 
 #endif /* COMMON_H */

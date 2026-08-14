@@ -13,11 +13,6 @@ void cgi_redirect(const char *url) {
     printf("Status: 302\r\nLocation: %s\r\n\r\n", url);
 }
 
-void cgi_error(const char *msg) {
-    cgi_header("text/html; charset=utf-8");
-    printf("<html><body><h2>Error</h2><p>%s</p></body></html>", msg);
-}
-
 char *get_env(const char *key) {
     char *val = getenv(key);
     return val ? val : "";
@@ -151,10 +146,10 @@ static void cache_post_body(void) {
 }
 
 /* Read POST body and extract param value.
- * Uses a rotating pool of buffers so multiple sequential calls don't
- * overwrite each other's results. */
-#define PARAM_POOL 6
-#define PARAM_SIZE 256
+ * Returns a freshly malloc'd URL-decoded copy, or NULL if the param is
+ * absent. The copy is never freed — the CGI process exits at request
+ * end. (The old rotating pool of 6 slots was removed: its slot count
+ * bound correctness to how many times callers invoked us.) */
 char *get_post_param(const char *param_name) {
     cache_post_body();
     if (!cached_body) return NULL;
@@ -168,13 +163,11 @@ char *get_post_param(const char *param_name) {
             char *end = strchr(p, '&');
             int val_len = end ? (int)(end - p) : (int)strlen(p);
 
-            /* URL decode into rotating result buffer pool */
-            static char pool[PARAM_POOL][PARAM_SIZE];
-            static int idx = 0;
-            char *result = pool[idx];
-            idx = (idx + 1) % PARAM_POOL;
+            /* URL decode into a fresh buffer sized to the value */
+            char *result = malloc(val_len + 1);
+            if (!result) return NULL;
             int i = 0, j = 0;
-            while (j < val_len && i < 255) {
+            while (j < val_len) {
                 if (p[j] == '%' && j + 2 < val_len) {
                     char hex[3] = {p[j+1], p[j+2], '\0'};
                     result[i++] = (char)strtol(hex, NULL, 16);
