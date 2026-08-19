@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Control Panel - Zynq</title>
+<title>Control Panel</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;1,400&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
@@ -49,10 +49,9 @@ if (!document.cookie.match(/csrf_token=/)) {
 
 <!-- Top navigation bar -->
 <nav class="top-nav">
-<div class="nav-brand">Zynq Web Control</div>
 <div class="nav-links">
 <a data-tab="status" onclick="switchTab('status')" class="active">服务器状态查看</a>
-<a data-tab="network" onclick="switchTab('network');loadRemoteConfig()">网络参数配置</a>
+<a data-tab="network" onclick="switchTab('network');loadNICConfig()">网络参数配置</a>
 <a data-tab="ntp" onclick="switchTab('ntp')">NTP及PTP时间服务配置</a>
 <a data-tab="monitor" onclick="switchTab('monitor')">服务监控及报警</a>
 <a data-tab="timesync" onclick="switchTab('timesync')">时间服务校验设置</a>
@@ -72,24 +71,19 @@ if (!document.cookie.match(/csrf_token=/)) {
 <div id="tab-status" class="tab-content active">
 <h2>服务器状态查看</h2>
 <p class="tab-status">● System Ready</p>
-<div class="send-section">
-<h3>串口调试</h3>
-<button id="sendBtn" onclick="sendCommand()">Send Data via Serial</button>
-<div id="result"></div>
-</div>
 </div>
 
 <!-- Tab 2: 网络参数配置 (Redesigned) -->
 <div id="tab-network" class="tab-content">
 <h2>网络参数配置</h2>
 
-<!-- Board tabs toolbar (tabs built from the BOARDS registry at load) -->
+<!-- NIC tabs toolbar (tabs built from the NICS registry at load) -->
 <div class="network-toolbar">
 <div class="board-tabs" id="board-tabs"></div>
 <button class="btn-refresh" onclick="refreshRemoteConfig()">刷新</button>
 </div>
 
-<!-- Board config: single form, repopulated for the active board on switch -->
+<!-- NIC config: single form, repopulated for the active NIC on switch -->
 <div id="board-config">
 
 <!-- IPv4 Panel -->
@@ -143,6 +137,12 @@ if (!document.cookie.match(/csrf_token=/)) {
 </div>
 </td>
 </tr>
+<tr>
+<td class="config-label">DNS服务器</td>
+<td class="config-value">
+<input type="text" class="input-full" id="remote-dns" placeholder="如 8.8.8.8，多个用逗号分隔" autocomplete="off">
+</td>
+</tr>
 </table>
 <div class="panel-actions">
 <button class="btn-set" onclick="saveIPv4()">设置</button>
@@ -170,11 +170,6 @@ if (!document.cookie.match(/csrf_token=/)) {
 
 <span id="remote-status"></span>
 </div><!-- end board-config -->
-
-<!-- Placeholder for unsupported boards (ok:false in BOARDS) -->
-<div id="board-placeholder" style="display:none">
-<p class="placeholder-text">该 Board 将在后续版本中支持</p>
-</div>
 
 </div><!-- end tab-network -->
 
@@ -266,98 +261,45 @@ function switchTab(tab) {
 }
 
 /* ================================================================
-   Serial Send (Tab 1)
+   NIC Registry + Tab Switching
    ================================================================ */
-function sendCommand() {
-    var btn = document.getElementById('sendBtn');
-    var res = document.getElementById('result');
-    btn.disabled = true;
-    btn.textContent = 'Sending...';
-    res.innerHTML = '<p class="info">Sending via serial port...</p>';
-    var xhr = new XMLHttpRequest();
-    xhr.open('POST', '/cgi-bin/action.cgi', true);
-    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
-    xhr.onload = function() {
-        if (xhr.status == 200) {
-            try {
-                var r = JSON.parse(xhr.responseText);
-                if (r.status == 'ok')
-                    res.innerHTML = '<p class="success">' + r.message + '</p>';
-                else
-                    res.innerHTML = '<p class="error">Error: ' + r.message + '</p>';
-            } catch(e) { res.innerHTML = '<p class="error">Parse error</p>'; }
-        } else { res.innerHTML = '<p class="error">HTTP ' + xhr.status + '</p>'; }
-        btn.disabled = false;
-        btn.textContent = 'Send Data via Serial';
-    };
-    xhr.onerror = function() {
-        res.innerHTML = '<p class="error">Network error</p>';
-        btn.disabled = false;
-        btn.textContent = 'Send Data via Serial';
-    };
-    xhr.send('action=send');
-}
-
-/* ================================================================
-   Board Registry + Tab Switching
-   ================================================================ */
-/* Front-end board registry — mirrors the board table in src/remote.c.
- * The two tables share one field: the port key (test_frontend.py
- * asserts they stay in sync).  ok:false boards render as placeholder
- * tabs; a real Board 3 = one row in both tables. */
-var BOARDS = [
-    { id: 1, port: '',   label: 'Board 1', dev: 'ttyS7', ok: true  },
-    { id: 2, port: 's4', label: 'Board 2', dev: 'ttyS4', ok: true  },
-    { id: 3, label: 'Board 3', ok: false },
-    { id: 4, label: 'Board 4', ok: false },
+/* Front-end NIC registry — mirrors the NIC list in src/nmcli.c
+ * (g_nics: eth0..eth3).  test_frontend.py asserts the two stay in
+ * sync.  All NICs are configured locally via NetworkManager
+ * (ADR-0003); eth0 changes additionally arm the rollback watchdog. */
+var NICS = [
+    { nic: 'eth0' },
+    { nic: 'eth1' },
+    { nic: 'eth2' },
+    { nic: 'eth3' },
 ];
 
-var currentBoard = 1;
+var currentNic = 'eth0';
 
-function boardEntry() {
-    for (var i = 0; i < BOARDS.length; i++)
-        if (BOARDS[i].id === currentBoard) return BOARDS[i];
-    return null;
-}
-
-/* Single form in the DOM; switching repopulates it for the active board.
- * (This matches the old behavior: switching always reloaded anyway.) */
-function switchBoard(b) {
-    currentBoard = b;
+/* Single form in the DOM; switching repopulates it for the active NIC */
+function switchNIC(nic) {
+    currentNic = nic;
     var tabs = document.querySelectorAll('.board-tab');
     for (var i = 0; i < tabs.length; i++) tabs[i].classList.remove('active');
-    document.querySelector('.board-tab[data-board="' + b + '"]').classList.add('active');
-
-    var entry = boardEntry();
-    if (entry && entry.ok) {
-        document.getElementById('board-config').style.display = 'block';
-        document.getElementById('board-placeholder').style.display = 'none';
-        loadRemoteConfig();
-    } else {
-        document.getElementById('board-config').style.display = 'none';
-        document.getElementById('board-placeholder').style.display = 'block';
-    }
+    document.querySelector('.board-tab[data-nic="' + nic + '"]').classList.add('active');
+    loadNICConfig();
 }
 
-/* Build the tab list from the registry (unsupported boards get a tab too) */
-function buildBoardTabs() {
+/* Build the tab list from the registry */
+function buildNICTabs() {
     var html = '';
-    for (var i = 0; i < BOARDS.length; i++) {
-        var b = BOARDS[i];
-        var label = b.label + (b.dev ? ' (' + b.dev + ')' : '');
-        html += '<a class="board-tab' + (b.id === 1 ? ' active' : '') +
-                '" data-board="' + b.id + '" onclick="switchBoard(' + b.id + ')">' +
-                label + '</a>';
+    for (var i = 0; i < NICS.length; i++) {
+        var n = NICS[i];
+        html += '<a class="board-tab' + (i === 0 ? ' active' : '') +
+                '" data-nic="' + n.nic + '" onclick="switchNIC(\'' + n.nic + '\')">' +
+                n.nic + '</a>';
     }
     document.getElementById('board-tabs').innerHTML = html;
 }
 
-/* CGI URL for the active board; port param only when the board has one */
+/* CGI URL for the active NIC (port is always set) */
 function networkUrl(action) {
-    var url = '/cgi-bin/network.cgi?action=' + action;
-    var b = boardEntry();
-    if (b && b.ok && b.port) url += '&port=' + b.port;
-    return url;
+    return '/cgi-bin/network.cgi?action=' + action + '&port=' + currentNic;
 }
 
 /* ================================================================
@@ -448,10 +390,10 @@ function setupOctetHandlers() {
 }
 
 /* ================================================================
-   Remote Config — Load / Save
+   NIC Config — Load / Save
    ================================================================ */
 
-function loadRemoteConfig() {
+function loadNICConfig() {
     setStatus('查询中...', 'info');
     var xhr = new XMLHttpRequest();
     xhr.open('GET', networkUrl('get'), true);
@@ -463,6 +405,7 @@ function loadRemoteConfig() {
                     setIP('ip', r.ipv4.ip);
                     setIP('mask', r.ipv4.mask);
                     setIP('gw', r.ipv4.gateway);
+                    document.getElementById('remote-dns').value = r.dns || '';
                     document.getElementById('remote-ipv6').value = r.ipv6 || '';
                     setStatus('已获取配置', 'success');
                 } else {
@@ -475,12 +418,13 @@ function loadRemoteConfig() {
     xhr.send();
 }
 
-function refreshRemoteConfig() { loadRemoteConfig(); }
+function refreshRemoteConfig() { loadNICConfig(); }
 
 function saveIPv4() {
     var ip = getIP('ip');
     var mask = getIP('mask');
     var gw = getIP('gw');
+    var dns = document.getElementById('remote-dns').value.trim();
     var v6 = document.getElementById('remote-ipv6').value.trim();
 
     /* Validate */
@@ -493,6 +437,7 @@ function saveIPv4() {
     var params = 'ip=' + encodeURIComponent(ip) +
                  '&mask=' + encodeURIComponent(mask) +
                  '&gateway=' + encodeURIComponent(gw) +
+                 '&dns=' + encodeURIComponent(dns) +
                  '&ipv6=' + encodeURIComponent(v6) +
                  '&csrf_token=' + encodeURIComponent(getCSRF());
     var xhr = new XMLHttpRequest();
@@ -504,7 +449,7 @@ function saveIPv4() {
                 var r = JSON.parse(xhr.responseText);
                 if (r.status == 'ok') {
                     setStatus('保存成功，正在刷新...', 'success');
-                    loadRemoteConfig();
+                    loadNICConfig();
                 } else {
                     setStatus('错误: ' + r.message, 'error');
                 }
@@ -520,6 +465,7 @@ function saveIPv6() {
     var ip = getIP('ip');
     var mask = getIP('mask');
     var gw = getIP('gw');
+    var dns = document.getElementById('remote-dns').value.trim();
     var v6 = document.getElementById('remote-ipv6').value.trim();
 
     if (!v6) {
@@ -531,6 +477,7 @@ function saveIPv6() {
     var params = 'ip=' + encodeURIComponent(ip) +
                  '&mask=' + encodeURIComponent(mask) +
                  '&gateway=' + encodeURIComponent(gw) +
+                 '&dns=' + encodeURIComponent(dns) +
                  '&ipv6=' + encodeURIComponent(v6) +
                  '&csrf_token=' + encodeURIComponent(getCSRF());
     var xhr = new XMLHttpRequest();
@@ -542,7 +489,7 @@ function saveIPv6() {
                 var r = JSON.parse(xhr.responseText);
                 if (r.status == 'ok') {
                     setStatus('IPv6 保存成功', 'success');
-                    loadRemoteConfig();
+                    loadNICConfig();
                 } else {
                     setStatus('错误: ' + r.message, 'error');
                 }
@@ -829,7 +776,7 @@ function deleteUser(id, username) {
 }
 // ===========================================================
 setupOctetHandlers();
-buildBoardTabs();
+buildNICTabs();
 </script>
 
 </body>

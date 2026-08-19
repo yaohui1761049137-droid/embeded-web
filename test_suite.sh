@@ -123,10 +123,10 @@ echo "8. Protected CGI (no session)"
 RESP=$(curl -sk https://$IP/cgi-bin/network.cgi?action=get 2>&1)
 assert_status "Not authenticated" "error" "$RESP"
 
-# ── Test 9: Serial communication ────────────────────────────────────
-echo "9. Serial communication (network.cgi GET)"
-RESP=$(curl -sk -b "$SID" "https://$IP/cgi-bin/network.cgi?action=get" 2>&1)
-assert_status "Serial query OK" "ok" "$RESP"
+# ── Test 9: Local NIC config (network.cgi GET eth0) ─────────────────
+echo "9. Local NIC config (network.cgi GET eth0)"
+RESP=$(curl -sk -b "$SID" "https://$IP/cgi-bin/network.cgi?action=get&port=eth0" 2>&1)
+assert_status "Config query OK" "ok" "$RESP"
 assert_contains "IPv4 data returned" "ipv4" "$RESP"
 assert_contains "IPv6 data returned" "ipv6" "$RESP"
 
@@ -134,7 +134,7 @@ assert_contains "IPv6 data returned" "ipv6" "$RESP"
 echo "10. CSRF protection (no token)"
 RESP=$(curl -sk -b "$SID" \
     -d "ip=192.168.8.100&mask=255.255.255.0&gateway=192.168.8.1" \
-    "https://$IP/cgi-bin/network.cgi?action=set" 2>&1)
+    "https://$IP/cgi-bin/network.cgi?action=set&port=eth1" 2>&1)
 assert_status "CSRF rejected" "error" "$RESP"
 assert_contains "CSRF message" "CSRF token invalid" "$RESP"
 
@@ -142,14 +142,25 @@ assert_contains "CSRF message" "CSRF token invalid" "$RESP"
 echo "11. CSRF protection (wrong token)"
 RESP=$(curl -sk -b "$SID; $CSRF_COOKIE" \
     -d "ip=192.168.8.100&mask=255.255.255.0&gateway=192.168.8.1&ipv6=&csrf_token=deadbeef" \
-    "https://$IP/cgi-bin/network.cgi?action=set" 2>&1)
+    "https://$IP/cgi-bin/network.cgi?action=set&port=eth1" 2>&1)
 assert_status "Wrong CSRF rejected" "error" "$RESP"
 
-# ── Test 12: CSRF success (valid token, Board 2 port=s4) ───────────────
-echo "12. CSRF success (Board 2, port=s4)"
+# ── Test 12: CSRF success (valid token, eth1) ───────────────────────
+# Write test goes to eth1, NOT eth0: an eth0 set would arm the 3-minute
+# rollback watchdog, and a gateway here would trigger gateway migration
+# (clearing eth0's gateway — killing the SSH session mid-suite).  So
+# eth1 is set without a gateway.  Original values are restored in 12d.
+echo "12. CSRF success (eth1 write)"
+ETH1_CFG=$(curl -sk -b "$SID" "https://$IP/cgi-bin/network.cgi?action=get&port=eth1" 2>&1)
+ETH1_VALUES=$(echo "$ETH1_CFG" | python3 -c "import json,sys; r=json.load(sys.stdin); print(r['ipv4']['ip'], r['ipv4']['mask'], r['ipv4']['gateway'], r['dns'], r['ipv6'])" 2>/dev/null)
+ETH1_HAD_PROFILE=0
+if [ -n "$ETH1_VALUES" ]; then
+    read ETH1_IP ETH1_MASK ETH1_GW ETH1_DNS ETH1_V6 <<< "$ETH1_VALUES"
+    [ -n "$ETH1_IP" ] && ETH1_HAD_PROFILE=1
+fi
 RESP=$(curl -sk -b "$SID; $CSRF_COOKIE" \
-    -d "ip=192.168.8.99&mask=255.255.255.0&gateway=192.168.8.1&ipv6=&csrf_token=$CSRF_VAL" \
-    "https://$IP/cgi-bin/network.cgi?action=set&port=s4" 2>&1)
+    -d "ip=192.168.8.99&mask=255.255.255.0&gateway=&dns=8.8.8.8,114.114.114.114&ipv6=2001:db8::99/64&csrf_token=$CSRF_VAL" \
+    "https://$IP/cgi-bin/network.cgi?action=set&port=eth1" 2>&1)
 assert_status "Valid CSRF accepted" "ok" "$RESP"
 
 # ── Test 12b: Audit log recorded after network SET ───────────────────
@@ -172,11 +183,26 @@ else
     FAIL=$((FAIL + 1))
 fi
 
-# ── Test 12c: Board 2 (port=s4) serial GET ────────────────────────────
-echo "12c. Board 2 (ttyS4) serial GET"
-RESP=$(curl -sk -b "$SID" "https://$IP/cgi-bin/network.cgi?action=get&port=s4" 2>&1)
-assert_status "Board 2 query OK" "ok" "$RESP"
-assert_contains "Board 2 IPv4 data" "ipv4" "$RESP"
+# ── Test 12c: eth1 config read-back ─────────────────────────────────
+echo "12c. eth1 config read-back"
+RESP=$(curl -sk -b "$SID" "https://$IP/cgi-bin/network.cgi?action=get&port=eth1" 2>&1)
+assert_status "eth1 query OK" "ok" "$RESP"
+assert_contains "eth1 new IPv4" '"ip":"192.168.8.99"' "$RESP"
+
+# ── Test 12d: restore eth1 (original values, or drop created profile) ─
+echo "12d. eth1 config restored"
+if [ "$ETH1_HAD_PROFILE" = "1" ]; then
+    RESP=$(curl -sk -b "$SID; $CSRF_COOKIE" \
+        -d "ip=$ETH1_IP&mask=$ETH1_MASK&gateway=$ETH1_GW&dns=$ETH1_DNS&ipv6=$ETH1_V6&csrf_token=$CSRF_VAL" \
+        "https://$IP/cgi-bin/network.cgi?action=set&port=eth1" 2>&1)
+    assert_status "eth1 restore OK" "ok" "$RESP"
+else
+    # no pre-existing profile → ours was auto-created, drop it
+    sshpass -p 'root' ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 root@$IP \
+        "nmcli connection delete id eth1 2>/dev/null; exit 0" > /dev/null 2>&1
+    green "  ✅ 临时 eth1 profile 已删除"
+    PASS=$((PASS + 1))
+fi
 
 # ── Test 13: Root API ───────────────────────────────────────────────
 echo "13. Root API (user_list)"
@@ -273,9 +299,9 @@ RESP=$(curl -sk -b "$ADMIN_SID; $ADMIN_CSRF" \
     -d "old_password=$TEST_PASS&new_password=$TEST_PASS2&csrf_token=$ADMIN_CSRF_VAL" \
     "https://$IP/cgi-bin/user_change_pass.cgi" 2>&1)
 assert_status "改密成功" "ok" "$RESP"
-RESP=$(curl -sk -b "$ADMIN2_SID" "https://$IP/cgi-bin/network.cgi?action=get" 2>&1)
+RESP=$(curl -sk -b "$ADMIN2_SID" "https://$IP/cgi-bin/network.cgi?action=get&port=eth1" 2>&1)
 assert_status "其他会话被踢" "error" "$RESP"
-RESP=$(curl -sk -b "$ADMIN_SID" "https://$IP/cgi-bin/network.cgi?action=get" 2>&1)
+RESP=$(curl -sk -b "$ADMIN_SID" "https://$IP/cgi-bin/network.cgi?action=get&port=eth1" 2>&1)
 assert_status "改密当前会话保留" "ok" "$RESP"
 
 # ── Test 26: Login with new password works ──────────────────────────
@@ -302,13 +328,13 @@ assert_contains "到期登录 → change.html" "ocation: /change.html" "$RESP"
 ADMIN_SID=$(echo "$RESP" | grep -o "session_id=[^;]*" | head -1)
 CSRF_COOKIE=$(echo "$RESP" | grep -o "csrf_token=[^;]*" | head -1)
 CSRF_VAL=$(echo "$CSRF_COOKIE" | sed 's/csrf_token=//')
-RESP=$(curl -sk -b "$ADMIN_SID" "https://$IP/cgi-bin/network.cgi?action=get" 2>&1)
+RESP=$(curl -sk -b "$ADMIN_SID" "https://$IP/cgi-bin/network.cgi?action=get&port=eth1" 2>&1)
 assert_contains "到期期间拦截" "密码已过期" "$RESP"
 RESP=$(curl -sk -b "$ADMIN_SID; $CSRF_COOKIE" \
     -d "old_password=$TEST_PASS2&new_password=$TEST_PASS&csrf_token=$CSRF_VAL" \
     "https://$IP/cgi-bin/user_change_pass.cgi" 2>&1)
 assert_status "到期强制改密成功" "ok" "$RESP"
-RESP=$(curl -sk -b "$ADMIN_SID" "https://$IP/cgi-bin/network.cgi?action=get" 2>&1)
+RESP=$(curl -sk -b "$ADMIN_SID" "https://$IP/cgi-bin/network.cgi?action=get&port=eth1" 2>&1)
 assert_status "改密后功能恢复" "ok" "$RESP"
 
 # ── Summary ──────────────────────────────────────────────────────────

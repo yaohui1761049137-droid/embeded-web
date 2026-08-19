@@ -1,17 +1,18 @@
-/* network.cgi — Phase 2: SQLite sessions + CSRF protection
+/* network.cgi — local NIC configuration via NetworkManager (ADR-0003)
  *
- * GET  ?action=get  →  query Remote Board IPv4 + IPv6 via serial
- * POST ?action=set  →  set IP config (requires csrf_token)
+ * GET  ?action=get&port=ethX  →  effective config JSON from nmcli
+ * POST ?action=set            →  validate → apply → (eth0: arm rollback)
  *
- * Both return JSON. Requires valid session_id cookie.
- * Since the remote module: board lookup, protocol grammar, retry and
- * PING warmup all live in remote.c — this file is a thin adapter.
+ * Both return JSON. Requires valid session_id cookie. All nmcli
+ * invocation, profile lookup and parameter validation live in nmcli.c;
+ * this file is a thin adapter plus the eth0 rollback orchestration.
  */
 #include "common.h"
 #include "auth.h"
 #include "gate.h"
-#include "remote.h"
+#include "nmcli.h"
 #include <string.h>
+#include <sys/wait.h>
 
 static void json_escape(const char *src, char *dst, int max) {
     int i, j;
@@ -27,67 +28,128 @@ static void json_escape(const char *src, char *dst, int max) {
     dst[j] = '\0';
 }
 
-/* ── Actions ─────────────────────────────────────────────────────── */
+/* ── Rollback (eth0 only, ADR-0003 D10) ───────────────────────────── */
 
-static int handle_get(int board) {
-    RemoteNetConfig cfg;
-    char err[128];
-    RemoteBoard *h = remote_board_open(board);
-    if (!h) {
-        cgi_header("application/json");
-        printf("{\"status\":\"error\",\"message\":\"Cannot open serial port\"}");
-        return 0;
+static const char *rollback_file(void) {
+    const char *p = getenv("ROLLBACK_FILE");
+    return (p && *p) ? p : "/var/db/rollback.json";
+}
+
+/* Snapshot the pre-change config and arm the 180 s watchdog.  The file
+ * is sourced by /usr/local/bin/rollback_watchdog.sh, so values must be
+ * shell-safe — they already are, since every field passed validation
+ * (IPv4/IPv6/DNS shapes contain no spaces or metacharacters). */
+static int arm_rollback(const char *nic, const NicConfig *old_cfg,
+                        const NicConfig *new_cfg, char *err, size_t errlen) {
+    const char *path = rollback_file();
+    FILE *f = fopen(path, "w");
+    if (!f) {
+        snprintf(err, errlen, "无法写入回滚状态 %s", path);
+        return -1;
     }
-    /* rc ignored on purpose: the wire contract is "ok with empty
-     * fields" when the board is unresponsive (front-end parses
-     * ipv4/ipv6 unconditionally). */
-    remote_query(h, &cfg, err, sizeof(err));
-    remote_board_close(h);
+    char old_cidr[80], new_cidr[80];
+    snprintf(old_cidr, sizeof(old_cidr), "%s/%d",
+             old_cfg->ip, nmcli_mask_to_prefix(old_cfg->mask));
+    snprintf(new_cidr, sizeof(new_cidr), "%s/%d",
+             new_cfg->ip, nmcli_mask_to_prefix(new_cfg->mask));
+    fprintf(f,
+            "nic=%s\nts=%ld\nconfirmed=0\n"
+            "old_cidr=%s\nold_ip=%s\nold_mask=%s\nold_gateway=%s\nold_dns=%s\nold_ipv6=%s\n"
+            "new_cidr=%s\nnew_ip=%s\nnew_mask=%s\nnew_gateway=%s\nnew_dns=%s\nnew_ipv6=%s\n",
+            nic, (long)time(NULL),
+            old_cidr, old_cfg->ip, old_cfg->mask, old_cfg->gateway, old_cfg->dns, old_cfg->ipv6,
+            new_cidr, new_cfg->ip, new_cfg->mask, new_cfg->gateway, new_cfg->dns, new_cfg->ipv6);
+    fclose(f);
 
-    cgi_header("application/json");
-    printf("{\"status\":\"ok\",\"ipv4\":{\"ip\":\"%s\",\"mask\":\"%s\",\"gateway\":\"%s\"},\"ipv6\":\"%s\"}",
-           cfg.ip, cfg.mask, cfg.gateway, cfg.ipv6);
+    /* Best-effort: if arming fails (e.g. host test), the boot-time
+     * rollback-recover.service still covers the pending state. */
+    char *argv[] = { "sudo", "-n", "systemd-run", "--on-active=180",
+                     "/usr/local/bin/rollback_watchdog.sh", NULL };
+    pid_t pid = fork();
+    if (pid == 0) {
+        execvp("sudo", argv);
+        _exit(127);
+    }
+    if (pid > 0) waitpid(pid, NULL, 0);
     return 0;
 }
 
-static int handle_set(int board) {
+/* ── Actions ─────────────────────────────────────────────────────── */
+
+static int handle_get(const char *nic) {
+    NicConfig cfg;
+    char err[256], esc[1024];
+    if (nmcli_get_config(nic, &cfg, err, sizeof(err)) < 0) {
+        cgi_header("application/json");
+        json_escape(err, esc, sizeof(esc));
+        printf("{\"status\":\"error\",\"message\":\"%s\"}", esc);
+        return 0;
+    }
+    cgi_header("application/json");
+    printf("{\"status\":\"ok\",\"ipv4\":{\"ip\":\"%s\",\"mask\":\"%s\",\"gateway\":\"%s\"},\"dns\":\"%s\",\"ipv6\":\"%s\"}",
+           cfg.ip, cfg.mask, cfg.gateway, cfg.dns, cfg.ipv6);
+    return 0;
+}
+
+static int handle_set(const char *nic) {
     char *ip      = get_post_param("ip");
     char *mask    = get_post_param("mask");
     char *gateway = get_post_param("gateway");
+    char *dns     = get_post_param("dns");
     char *ipv6    = get_post_param("ipv6");
 
-    if (!ip || !mask || !gateway || !*ip || !*mask || !*gateway) {
+    if (!ip || !mask || !*ip || !*mask) {
         cgi_header("application/json");
-        printf("{\"status\":\"error\",\"message\":\"Missing IPv4 parameters\"}");
+        printf("{\"status\":\"error\",\"message\":\"缺少 IPv4 参数\"}");
         return 0;
     }
 
-    RemoteBoard *h = remote_board_open(board);
-    if (!h) {
+    NicConfig cfg;
+    memset(&cfg, 0, sizeof(cfg));
+    snprintf(cfg.ip, sizeof(cfg.ip), "%s", ip);
+    snprintf(cfg.mask, sizeof(cfg.mask), "%s", mask);
+    if (gateway) snprintf(cfg.gateway, sizeof(cfg.gateway), "%s", gateway);
+    if (dns)     snprintf(cfg.dns, sizeof(cfg.dns), "%s", dns);
+    if (ipv6)    snprintf(cfg.ipv6, sizeof(cfg.ipv6), "%s", ipv6);
+
+    char err[512], esc[1024];
+    if (!nmcli_validate_params(&cfg, err, sizeof(err))) {
         cgi_header("application/json");
-        printf("{\"status\":\"error\",\"message\":\"Cannot open serial port\"}");
-        return 0;
-    }
-
-    RemoteNetConfig cfg;
-    strncpy(cfg.ip, ip, sizeof(cfg.ip) - 1);
-    strncpy(cfg.mask, mask, sizeof(cfg.mask) - 1);
-    strncpy(cfg.gateway, gateway, sizeof(cfg.gateway) - 1);
-    cfg.ipv6[0] = '\0';
-    if (ipv6) strncpy(cfg.ipv6, ipv6, sizeof(cfg.ipv6) - 1);
-
-    char err[256], esc[1024];
-    int r = remote_configure(h, &cfg, err, sizeof(err));
-    remote_board_close(h);
-
-    cgi_header("application/json");
-    if (r == 0) {
-        printf("{\"status\":\"ok\",\"message\":\"保存成功\"}");
-    } else {
         json_escape(err, esc, sizeof(esc));
         printf("{\"status\":\"error\",\"message\":\"%s\"}", esc);
+        return 0;
     }
-    return r == 0 ? 1 : 0;
+
+    /* eth0 changes are guarded by the rollback watchdog: snapshot the
+     * old config first so it can be restored if nobody logs in. */
+    NicConfig old_cfg;
+    int rollback = (strcmp(nic, "eth0") == 0);
+    if (rollback) {
+        memset(&old_cfg, 0, sizeof(old_cfg));
+        if (nmcli_get_config(nic, &old_cfg, err, sizeof(err)) < 0) {
+            cgi_header("application/json");
+            printf("{\"status\":\"error\",\"message\":\"无法读取当前配置，已取消修改\"}");
+            return 0;
+        }
+    }
+
+    if (nmcli_set_config(nic, &cfg, err, sizeof(err)) < 0) {
+        cgi_header("application/json");
+        json_escape(err, esc, sizeof(esc));
+        printf("{\"status\":\"error\",\"message\":\"%s\"}", esc);
+        return 0;
+    }
+
+    if (rollback && arm_rollback(nic, &old_cfg, &cfg, err, sizeof(err)) < 0) {
+        cgi_header("application/json");
+        json_escape(err, esc, sizeof(esc));
+        printf("{\"status\":\"error\",\"message\":\"%s\"}", esc);
+        return 0;
+    }
+
+    cgi_header("application/json");
+    printf("{\"status\":\"ok\",\"message\":\"保存成功\"}");
+    return 1;
 }
 
 /* ── Entry point ─────────────────────────────────────────────────── */
@@ -97,7 +159,7 @@ int main(void) {
     SessionInfo session;
     if (!gate_json_session(&session)) return 0;
 
-    /* Parse action & port (query-string parsing is HTTP policy — stays here) */
+    /* Parse action & NIC (query-string parsing is HTTP policy — stays here) */
     const char *qs = get_env("QUERY_STRING");
     char action[16] = "";
     if (strncmp(qs, "action=", 7) == 0) {
@@ -118,31 +180,32 @@ int main(void) {
         }
     }
 
-    int board = remote_board_lookup(port);
-    if (board < 0) {
+    if (!nmcli_nic_valid(port)) {
         cgi_header("application/json");
-        printf("{\"status\":\"error\",\"message\":\"Invalid board\"}");
+        printf("{\"status\":\"error\",\"message\":\"无效的网口\"}");
         auth_cleanup();
         return 0;
     }
 
     if (strcmp(action, "get") == 0) {
         auth_cleanup();
-        return handle_get(board);
+        return handle_get(port);
     }
 
-    /* For "set": CSRF check before any side effect (serial writes) */
+    /* For "set": CSRF check before any side effect (nmcli writes) */
     if (strcmp(action, "set") == 0) {
         const char *csrf = get_post_param("csrf_token");
         if (!gate_require_csrf(&session, csrf)) {
             auth_cleanup();
             return 0;
         }
-        int ok = handle_set(board);   /* 1 = success */
+        int ok = handle_set(port);   /* 1 = success */
         if (ok == 1) {
+            char detail[128];
+            snprintf(detail, sizeof(detail), "%s 网口网络配置已修改%s", port,
+                     strcmp(port, "eth0") == 0 ? "（3 分钟未登录将自动回滚）" : "");
             auth_audit_log(session.user_id, "network_set", session.user_id,
-                           "Remote Board network config modified via serial",
-                           getenv("REMOTE_ADDR"));
+                           detail, getenv("REMOTE_ADDR"));
         }
         /* exit code is meaningless for a CGI (lighttpd ignores it); the
          * old 1-on-success broke set -e pipelines in host tests */

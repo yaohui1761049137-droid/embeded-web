@@ -1,23 +1,19 @@
 #!/usr/bin/env python3
-"""test_frontend.py — front-end board registry consistency checks (offline).
+"""test_frontend.py — front-end NIC registry consistency checks (offline).
 
-The "Board" concept lives in two tables by design:
+The set of manageable NICs lives in two tables by design:
 
-  * src/remote.c g_boards     — protocol routing (port key → device/baud)
-  * www/control_panel.html    — JS BOARDS registry (tabs, port param,
-                                placeholder boards)
+  * src/nmcli.c g_nics        — which interfaces network.cgi accepts
+  * www/control_panel.html    — JS NICS registry (tabs, port param)
 
-They share exactly one field — the port key. This test asserts they stay
-in sync:
-
-  * C table port keys == port keys of supported (ok) JS boards (both ways)
-  * every supported JS board carries port + dev; dev matches the C device
-  * unsupported JS boards carry no port key
-  * board ids are unique; every board has an id + label
+They share exactly one field — the NIC name (eth0..eth3). This test
+asserts they stay in sync, both directions and in order.  Order matters:
+the tabs render in registry order and eth0 must stay first — it is the
+only NIC whose changes arm the rollback watchdog (ADR-0003 D10).
 
 Rendering itself is JS-only and cannot be checked statically — browser
 screenshots cover that. This test only guards the data contract, so
-adding a board to one table but not the other fails immediately.
+adding a NIC to one table but not the other fails immediately.
 
 Usage: ./test_frontend.py [repo_root]   (default: script's parent dir)
 Exit: 0 = consistent, 1 = drift found (each drift printed)
@@ -26,80 +22,51 @@ import re
 import sys
 from pathlib import Path
 
-# C table rows: { "<port>", "/dev/<dev>", <baud> }
-C_ROW_RE = re.compile(r'\{\s*"([^"]*)",\s*"/dev/([^"]+)",\s*[0-9]+\s*\}')
-# JS entry fields: key : 'str' | number | true|false
-JS_FIELD_RE = re.compile(r"(\w+)\s*:\s*(?:'([^']*)'|(\d+)|(true|false))")
+# C table: static const char *g_nics[4] = { "eth0", "eth1", "eth2", "eth3" };
+C_NICS_RE = re.compile(r"g_nics\[[^\]]*\]\s*=\s*\{\s*([^}]*)\}")
+C_NIC_RE = re.compile(r'"([^"]+)"')
+# JS table: var NICS = [ { nic: 'eth0' }, { nic: 'eth1' }, ... ];
+JS_NICS_RE = re.compile(r"var\s+NICS\s*=\s*\[(.*?)\];", re.S)
+JS_NIC_RE = re.compile(r"nic\s*:\s*'([^']+)'")
 
 
-def parse_c_boards(src_text):
-    return [(m.group(1), m.group(2)) for m in C_ROW_RE.finditer(src_text)]
-
-
-def parse_js_boards(html_text):
-    m = re.search(r"var\s+BOARDS\s*=\s*\[(.*?)\];", html_text, re.S)
+def parse_c_nics(src_text):
+    m = C_NICS_RE.search(src_text)
     if not m:
-        raise ValueError("BOARDS array not found in www/control_panel.html")
-    boards = []
-    for block in re.finditer(r"\{([^{}]*)\}", m.group(1)):
-        b = {}
-        for fm in JS_FIELD_RE.finditer(block.group(1)):
-            key = fm.group(1)
-            if fm.group(2) is not None:
-                b[key] = fm.group(2)    # quoted string; '' is valid (Board 1 port)
-            elif fm.group(3):
-                b[key] = int(fm.group(3))
-            elif fm.group(4):
-                b[key] = fm.group(4) == "true"
-        boards.append(b)
-    return boards
+        raise ValueError("g_nics array not found in src/nmcli.c")
+    return C_NIC_RE.findall(m.group(1))
+
+
+def parse_js_nics(html_text):
+    m = JS_NICS_RE.search(html_text)
+    if not m:
+        raise ValueError("NICS array not found in www/control_panel.html")
+    return JS_NIC_RE.findall(m.group(1))
 
 
 def check(repo):
     root = Path(repo)
-    c_rows = parse_c_boards((root / "src" / "remote.c").read_text())
-    boards = parse_js_boards((root / "www" / "control_panel.html").read_text())
+    c_nics = parse_c_nics((root / "src" / "nmcli.c").read_text())
+    js_nics = parse_js_nics((root / "www" / "control_panel.html").read_text())
 
     errors = []
-    c_ports = {p for p, _ in c_rows}
-    c_dev = {p: d for p, d in c_rows}
-    ok_boards = [b for b in boards if b.get("ok")]
-    js_ports = {b["port"] for b in ok_boards if "port" in b}
-
-    if c_ports != js_ports:
-        errors.append("port keys drifted: "
-                      "C=%s JS(ok)=%s" % (sorted(c_ports), sorted(js_ports)))
-
-    for b in ok_boards:
-        if "port" not in b or "dev" not in b:
-            errors.append("Board %s: supported board lacks port/dev fields"
-                          % b.get("id"))
-            continue
-        cdev = c_dev.get(b["port"])
-        if cdev is None:
-            continue  # already reported by the set mismatch above
-        if b["dev"] != cdev:
-            errors.append("Board %s (port=%s): dev '%s' != C device '%s'"
-                          % (b.get("id"), b["port"], b["dev"], cdev))
-
-    for b in boards:
-        if not b.get("ok") and "port" in b:
-            errors.append("Board %s: unsupported board must not carry a port key"
-                          % b.get("id"))
-        if "id" not in b or "label" not in b:
-            errors.append("Board %s: every board needs id + label" % b.get("id"))
-
-    ids = [b.get("id") for b in boards]
-    if len(set(ids)) != len(ids):
-        errors.append("duplicate board ids: %s" % ids)
+    if c_nics != js_nics:
+        errors.append("NIC lists drifted: C=%s JS=%s" % (c_nics, js_nics))
+    if not js_nics:
+        errors.append("JS NICS registry is empty")
+    if js_nics and js_nics[0] != "eth0":
+        errors.append("first NIC must be eth0 (rollback watchdog port): %s"
+                      % js_nics[0])
+    if len(set(js_nics)) != len(js_nics):
+        errors.append("duplicate NIC entries: %s" % js_nics)
 
     if errors:
         for e in errors:
             print("  ❌ %s" % e)
-        print("frontend registry ↔ C board table out of sync")
+        print("frontend NICS registry ↔ nmcli.c g_nics out of sync")
         return 1
-    print("  ✅ frontend registry consistent with remote.c "
-          "(%d supported / %d slots)" % (len(ok_boards), len(boards)))
+    print("  ✅ frontend NICS registry consistent with nmcli.c g_nics "
+          "(%d NICs)" % len(js_nics))
     return 0
 
 

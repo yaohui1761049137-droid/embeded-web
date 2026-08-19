@@ -1,8 +1,4 @@
 #include "common.h"
-#include <sys/ioctl.h>
-#include <sys/select.h>
-#include <asm-generic/termbits.h>
-#include <dirent.h>
 /* === HTTP Helpers === */
 
 void cgi_header(const char *content_type) {
@@ -44,82 +40,6 @@ char *get_cookie(const char *name) {
         if (*p == ';') p++;
     }
     return NULL;
-}
-
-/* === Serial Port === */
-
-int serial_open(const char *device, unsigned int baudrate) {
-    int fd = open(device, O_RDWR | O_NOCTTY | O_NDELAY);
-    if (fd < 0) return -1;
-
-    /* Use termios2 for custom baud rate */
-    struct termios2 tio;
-    if (ioctl(fd, TCGETS2, &tio)) {
-        close(fd);
-        return -1;
-    }
-
-    tio.c_cflag &= ~CBAUD;
-    tio.c_cflag |= BOTHER;
-    tio.c_cflag |= CS8 | CLOCAL | CREAD;
-    tio.c_cflag &= ~(CSTOPB | PARENB | PARODD | CSIZE);
-    tio.c_cflag |= CS8;
-
-    tio.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL | IXON);
-    tio.c_oflag &= ~OPOST;
-    tio.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
-    tio.c_cc[VMIN] = 0;
-    tio.c_cc[VTIME] = 10;
-
-    tio.c_ispeed = baudrate;
-    tio.c_ospeed = baudrate;
-
-    if (ioctl(fd, TCSETS2, &tio)) {
-        close(fd);
-        return -1;
-    }
-
-    /* Flush */
-    ioctl(fd, TCFLSH, TCIOFLUSH);
-    return fd;
-}
-
-int serial_send(int fd, const char *data, int len) {
-    if (fd < 0 || !data) return -1;
-    return write(fd, data, len);
-}
-
-void serial_close(int fd) {
-    if (fd >= 0) close(fd);
-}
-
-/* Read one line (until \n) from serial fd with timeout_ms.
- * Returns bytes read, 0 on timeout, -1 on error. Strips \r. */
-int serial_read_line(int fd, char *buf, int max_len, int timeout_ms) {
-    fd_set set;
-    struct timeval tv;
-    int pos = 0;
-
-    while (pos < max_len - 1) {
-        FD_ZERO(&set);
-        FD_SET(fd, &set);
-        tv.tv_sec = timeout_ms / 1000;
-        tv.tv_usec = (timeout_ms % 1000) * 1000;
-
-        int ret = select(fd + 1, &set, NULL, NULL, &tv);
-        if (ret < 0) return -1;       /* select error */
-        if (ret == 0) break;           /* timeout — return what we have */
-
-        char c;
-        ret = read(fd, &c, 1);
-        if (ret <= 0) break;           /* read error or EOF */
-
-        if (c == '\n') break;          /* end of line */
-        if (c != '\r') buf[pos++] = c; /* strip CR */
-    }
-
-    buf[pos] = '\0';
-    return pos;
 }
 
 /* === POST Body Parsing === */

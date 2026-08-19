@@ -2,7 +2,8 @@
 
 嵌入式 Web 管理系统，基于 **Lighttpd 1.4.59 + C CGI**，运行在 LubanCat ARM aarch64 开发板上。
 
-通过串口连接多个 Remote Board，实现网络参数的远程查询和配置。支持双板独立管理。
+通过 NetworkManager（nmcli）对开发板本机网卡（eth0-3）进行网络参数配置：静态 IPv4（IP/掩码/网关）、
+可选 DNS、静态 IPv6，支持网卡切换与 eth0 变更自动回滚。
 
 ## 功能
 
@@ -10,12 +11,14 @@
 - **多用户认证**（root / admin 角色，SHA-256 密码哈希，10 万轮迭代）
 - **密码策略**（10-64 字符四类组合，90 天有效期，到期强制改密，用户自助改密）
 - **Session + CSRF 双重防护**（HttpOnly Cookie + CSRF Token）
-- **串口通信**（termios2 / BOTHER 自定义波特率，PING 预热 + 重试）
-- **多 Board 支持**（Web 控制面板一键切换，独立配置互不干扰）
+- **本地网卡配置**（eth0-3 四个网口，通过 NetworkManager nmcli 读写，无串口层）
+- **多 NIC 支持**（Web 控制面板网口标签页一键切换，独立配置互不干扰）
+- **唯一网关约束**（新配置生效时自动清空其他网口的网关，避免多默认路由）
+- **eth0 回滚保护**（变更后 3 分钟登录信号超时自动回滚旧配置，掉电重启后恢复）
 - **用户管理 API**（root 可创建/启用/禁用/删除 admin 用户，含审计日志）
 - **业务审计日志**（网络配置修改自动记录操作者和时间到 `audit_log` 表）
 - **SQLite 存储**（WAL 模式，多进程 CGI 并发安全）
-- **46 项自动化测试**（`test_suite.sh`，含 Board 2 和审计日志验证）
+- **72 项自动化测试**（`test_gate.sh`，宿主机离线全绿，含 NMCLI_OVERRIDE 假命令）
 
 ## 架构
 
@@ -33,25 +36,29 @@
 └──────┬──────────────┘
        │
        ▼
-┌──────────────────────────────┐      Serial /dev/ttyS7 (115200)  ┌──────────────────┐
-│  CGI Programs (C)            │      ──────────────────────────→ │  Board 1          │
-│  + gate.c (门卫阶梯+强制改密)│      ←────────────────────────── │  handler.sh       │
-│  + auth.c (SQLite/审计/策略) │                                  │  192.168.8.201    │
-│  + users.c (用户管理/自改密) │      Serial /dev/ttyS4 (38400)   └──────────────────┘
-│  + remote.c (板表+协议)      │      ──────────────────────────→ ┌──────────────────┐
-│  + common.c (HTTP/串口/POST) │      ←────────────────────────── │  Board 2          │
-│                              │                                  │  handler.sh       │
-│  network.cgi ?port=s4 ───────│                                  │  192.168.8.99     │
-│                              │                                  └──────────────────┘
+┌──────────────────────────────┐
+│  CGI Programs (C)            │
+│  + gate.c (门卫阶梯+强制改密)│
+│  + auth.c (SQLite/审计/策略) │
+│  + users.c (用户管理/自改密) │
+│  + nmcli.c (本地网卡配置库)  │  ← fork/execvp，无 shell，参数白名单校验
+│  + common.c (HTTP/POST)      │
+│                              │
+│  network.cgi ?port=eth0 ─────│  ← nmcli 读写 + 回滚编排 + 审计
+│                              │
 │  audit_log (业务操作)        │
-└──────────────────────────────┘
-       │
-       ▼
-┌──────────────┐
-│   SQLite DB   │  ← users / sessions / audit_log
-│  /var/db/     │
-└──────────────┘
+└──────────────┬───────────────┘
+       │                       │
+       ▼                       ▼
+┌──────────────┐   ┌───────────────────────────────┐
+│   SQLite DB   │   │  NetworkManager (系统服务)     │
+│  /var/db/     │   │  nmcli ← sudoers 白名单        │
+└──────────────┘   │  配置文件在 /etc/NetworkManager │
+                   └───────────────────────────────┘
 ```
+
+CGI 以 www-data 身份运行，经 `/etc/sudoers.d/99-www-nmcli` 的 NOPASSWD 白名单调用 nmcli，
+参数在白名单和 nmcli.c 双重校验（IP/掩码/网关/DNS/IPv6 格式 + 网口名枚举）。
 
 ## 目录结构
 
@@ -67,13 +74,12 @@ embeded_Lighttpd/
 │   ├── auth.h / auth.c        认证库（Session/User/CSRF/Audit）
 │   ├── gate.h / gate.c        CGI 请求门卫（session → role → CSRF 阶梯 + 强制改密，统一错误输出）
 │   ├── users.h / users.c      用户管理模块（业务不变量 + SQL + 审计，位于 gate 之上）
-│   ├── remote.h / remote.c    Remote Board 协议客户端（板表 + PING 预热 + 重试 + OK/ERR 文法）
-│   ├── common.h / common.c    CGI 公共库（HTTP/串口/POST 解析）
-│   ├── login.cgi.c            登录（DB 验证 + 双 Cookie）
+│   ├── nmcli.h / nmcli.c      本地网卡配置库（fork/execvp 调用 nmcli + 参数校验 + 掩码⇄前缀）
+│   ├── common.h / common.c    CGI 公共库（HTTP/POST 解析）
+│   ├── login.cgi.c            登录（DB 验证 + 双 Cookie + 回滚确认标记）
 │   ├── logout.cgi.c           登出（销毁 Session）
 │   ├── main.cgi.c             控制面板入口（Session 校验）
-│   ├── network.cgi.c          网络配置（串口通信 + CSRF）
-│   ├── action.cgi.c           串口调试工具
+│   ├── network.cgi.c          网络配置（nmcli 读写 + 回滚编排 + 审计）
 │   ├── db_init.c              数据库初始化（创建 root 用户）
 │   ├── user_list.cgi.c        [root] 用户列表
 │   ├── user_create.cgi.c      [root] 创建用户
@@ -83,17 +89,17 @@ embeded_Lighttpd/
 │   └── user_change_pass.cgi.c 用户自改密（当前密码验证 + 策略 + 踢会话）
 ├── www/
 │   ├── index.html             登录页面
-│   ├── control_panel.html     控制面板（7 Tab，含 Board 1/2 切换）
+│   ├── control_panel.html     控制面板（7 Tab，网口标签页由 NICS 注册表驱动）
 │   ├── change.html            修改密码页面（自改密入口）
 │   └── style.css              全局样式
-├── docs/adr/                  ADR 决策记录（0002 = 密码策略）
-├── handler.sh                 Remote Board 串口协议处理脚本
-├── test_suite.sh              46 项端到端测试
-├── test_gate.sh               宿主机门卫单测（CGI 级，无需板子）
+├── docs/adr/                  ADR 决策记录（0002 = 密码策略，0003 = 本地网络配置）
+├── rollback_watchdog.sh       eth0 回滚看门狗（systemd-run 触发 + 开机恢复双入口）
+├── rollback-recover.service   开机回滚恢复 oneshot 服务
+├── fake_nmcli.sh              宿主机离线测试用假 nmcli（NMCLI_OVERRIDE）
+├── test_suite.sh              板端端到端测试（真实 nmcli）
+├── test_gate.sh               宿主机门卫单测（CGI 级，无需板子，72 项）
 ├── test_users.c               宿主机用户模块单测（API 级，无需板子）
-├── test_remote.c              宿主机协议客户端单测（API 级，pty 假板驱动）
-├── test_fake_board.py         脚本化假 Remote Board（pty 协议仿真，供离线测试）
-└── test_frontend.py           前端板注册表 ↔ remote.c 板表一致性测试（离线）
+└── test_frontend.py           前端 NICS 注册表 ↔ nmcli.c 网口枚举一致性测试（离线）
 ```
 
 ## 快速开始
@@ -102,6 +108,7 @@ embeded_Lighttpd/
 
 - **目标板**：ARM aarch64，Debian Buster，gcc 8.3+
 - **运行时**：Lighttpd 1.4.59+ (with mod_openssl)，OpenSSL 1.1.1+，PCRE
+- **网络**：NetworkManager（Debian Buster 自带 1.14），nmcli
 - **编译**：仅需 gcc + make，零外部库依赖（SQLite 和 SHA-256 均内嵌）
 
 ### 安装 Lighttpd
@@ -120,7 +127,6 @@ scp config/10-*.conf root@<board>:/etc/lighttpd/conf-available/
 ssh root@<board> '
   ln -sf /etc/lighttpd/conf-available/10-cgi.conf /etc/lighttpd/conf-enabled/
   ln -sf /etc/lighttpd/conf-available/10-ssl.conf /etc/lighttpd/conf-enabled/
-  usermod -a -G dialout www-data
 '
 
 # 2. 生成 TLS 证书
@@ -138,25 +144,24 @@ ssh root@<board> '
 '
 ```
 
-### 部署 Phase 2（多用户系统）
+### 部署 Phase 2（多用户系统 + 本地网络配置）
 
 ```bash
 # 1. 打包源码并上传
 tar czf src.tar.gz src/*.c src/*.h
 scp src.tar.gz www/* root@<board>:/tmp/
 
-# 2. 编译
+# 2. 编译（含 nmcli.c）
 ssh root@<board> '
   cd /tmp && tar xzf src.tar.gz && cd src
   # sqlite3.o 跨部署复用（tar 只含 .c/.h，不会被覆盖）
   [ -f sqlite3.o ] || gcc -c -O2 -DSQLITE_THREADSAFE=0 sqlite3.c -o sqlite3.o
 
-  # 编译所有 CGI（统一命令）
-  for src in login.cgi.c logout.cgi.c main.cgi.c network.cgi.c action.cgi.c \
+  for src in login.cgi.c logout.cgi.c main.cgi.c network.cgi.c \
              user_list.cgi.c user_create.cgi.c user_passwd.cgi.c \
              user_toggle.cgi.c user_delete.cgi.c user_change_pass.cgi.c; do
     name=$(echo $src | sed "s/\.cgi\.c//" | sed "s/\.c//").cgi
-    gcc -Wall -O2 -o $name $src common.c auth.c gate.c users.c remote.c sha256.c sqlite3.o -lpthread -ldl
+    gcc -Wall -O2 -o $name $src common.c auth.c gate.c users.c nmcli.c sha256.c sqlite3.o -lpthread -ldl
   done
 
   # 初始化数据库
@@ -171,7 +176,37 @@ ssh root@<board> '
   chmod 755 /home/www/cgi-bin/*.cgi
   cp control_panel.html index.html style.css change.html /home/www/
 '
+
+# 3. www-data sudoers 白名单（nmcli 调用入口，务必先于任何网络配置使用）
+ssh root@<board> '
+  cat > /etc/sudoers.d/99-www-nmcli <<EOF
+www-data ALL=(ALL) NOPASSWD: /usr/bin/nmcli -t -f NAME\\,UUID connection show, /usr/bin/nmcli -t connection show *, /usr/bin/nmcli -t device show *, /usr/bin/nmcli connection show *, /usr/bin/nmcli connection add type ethernet ifname *, /usr/bin/nmcli connection modify *, /usr/bin/nmcli connection up *, /usr/bin/systemd-run --on-active=180 /usr/local/bin/rollback_watchdog.sh
+EOF
+  chmod 440 /etc/sudoers.d/99-www-nmcli
+  visudo -cf /etc/sudoers.d/99-www-nmcli
+
+  # 4. 回滚看门狗 + 开机恢复服务
+  cp rollback_watchdog.sh /usr/local/bin/
+  chmod 755 /usr/local/bin/rollback_watchdog.sh
+  cp rollback-recover.service /etc/systemd/system/
+  systemctl enable rollback-recover.service
+'
 ```
+
+### 网络配置说明（ADR-0003）
+
+- **配置源**：NetworkManager profile 是唯一事实源，`network.cgi` 只做读写映射
+  （IP/掩码 ⇄ CIDR，掩码校验连续 1 位）。
+- **网口**：eth0-3 由前端 `NICS` 注册表（`control_panel.html`）与 `nmcli.c` 的 `g_nics`
+  枚举双向一致（`test_frontend.py` 断言），默认激活 eth0。
+- **IPv4**：静态 IP/掩码/网关；**DNS**：1-2 个，逗号分隔，可留空；**IPv6**：手动
+  地址/前缀，留空则 `ipv6.method=ignore`（NM 1.14 不支持 `disabled`）。
+- **唯一网关**：配置带网关的新网口时自动清空其他网口网关；eth0 网关优先于 4G
+  （4G 由 `/opt/auto_4G.sh` 看门狗把 wwan0 默认路由 metric 调到 200）。
+- **回滚保护（仅 eth0）**：写配置 → 写 `/var/db/rollback.json`（旧值+时间戳）→
+  `systemd-run --on-active=180` 起看门狗。3 分钟内出现登录信号（web 登录写
+  `confirmed=1`，或 SSH auth.log 有更新的 Accepted 记录）→ 保留新配置并清文件；
+  否则回滚旧值。掉电重启时 `rollback-recover.service` 在开机执行同一检查。
 
 ### 密码策略与迁移（ADR-0002）
 
@@ -186,23 +221,23 @@ ssh root@<board> '
 
 ### 运行测试
 
-宿主机单测（无需板子，x86_64 gcc 编译 + 临时 SQLite 库）：
+宿主机单测（无需板子、无需 NetworkManager、无需 sudo，x86_64 gcc 编译 + 临时 SQLite 库）：
 
 ```bash
 ./test_gate.sh
 ```
 
-`test_gate.sh` 内置四层：
+`test_gate.sh` 内置四层，共 72 项：
 - CGI 级门卫测试（gate 阶梯 + 登录/登出 + 用户 CRUD 冒烟）
 - API 级用户模块测试（`test_users.c` 直接断言 users 模块的不变量：自删/删 root/禁最后
   root 拒绝、审计行 target_user_id 正确）
-- 串口离线测试：`test_remote.c` 通过 pty 假板（`test_fake_board.py`）驱动 remote 模块，
-  覆盖重试、超时、ERR、乱码响应与板表查表；`test_gate.sh` 内另有 4 项 network.cgi 冒烟
-  （`REMOTE_SERIAL_DEVICE_OVERRIDE` 指向 pty，端到端验证 JSON 形状与未知 port 拒绝）
-- 前端注册表一致性：`test_frontend.py` 解析 `control_panel.html` 的 `BOARDS` 与
-  `remote.c` 板表，断言 port 键双向一致（渲染本身由浏览器截图核对，curl 测不到 JS 生成物）
+- 网络配置测试（Test 7-7f）：`NMCLI_OVERRIDE` 指向 `fake_nmcli.sh` 离线跑 network.cgi——
+  eth0 读回、SET + 回滚文件断言（`ROLLBACK_FILE`）、非法网口拒绝、eth1 自动建 profile、
+  网关自动迁移；`NMCLI_NO_SUDO=1` 跳过 sudo 前缀
+- 前端注册表一致性：`test_frontend.py` 解析 `control_panel.html` 的 `NICS` 与
+  `nmcli.c` 的 `g_nics`，断言网口列表双向一致（渲染本身由浏览器截图核对）
 
-板端端到端测试（需 LubanCat + Remote Board 在线）：
+板端端到端测试（需 LubanCat 在线，配置真实 nmcli；凭据按环境传入）：
 
 ```bash
 ./test_suite.sh <board_ip>
@@ -210,8 +245,8 @@ ssh root@<board> '
 
 > 门卫模块（gate.c）读取 `DB_PATH` 环境变量覆盖数据库路径（默认 `/var/db/myapp.db`），
 > 使 CGI 二进制可在宿主机以受控环境变量离线运行——`test_gate.sh` 依赖此特性。
-> 同理，remote 模块读取 `REMOTE_SERIAL_DEVICE_OVERRIDE` 覆盖板子的串口设备路径，
-> 使串口测试可用 pty 假板离线进行。
+> 同理，nmcli 调用读取 `NMCLI_OVERRIDE` 覆盖可执行文件、`NMCLI_NO_SUDO=1` 去掉 sudo，
+> 使网络配置测试可用假命令离线进行。
 
 ## 安全模型
 
@@ -222,6 +257,7 @@ ssh root@<board> '
 | 密码策略 | 10-64 字符（大小写/数字/特殊符号四类），90 天有效期，到期强制改密，root 无豁免 |
 | CSRF | 双 Cookie：`session_id`(HttpOnly) + `csrf_token`(JS可读)，POST 需回传 |
 | 权限 | root/admin 角色分离，root 保护（不可自删/不可禁最后一个 root） |
+| 系统命令 | nmcli 经 www-data sudoers NOPASSWD 白名单放行；参数先白名单/格式双重校验，fork/execvp 无 shell |
 | 审计 | `audit_log` 表记录所有管理操作 |
 | SQL | 参数化查询（SQLite prepared statements） |
 
@@ -235,49 +271,16 @@ Set-Cookie: csrf_token=<32 hex>; Path=/; Secure; SameSite=Lax; Max-Age=3600
 - `session_id` — HttpOnly，XSS 无法窃取，服务端 SQLite 校验
 - `csrf_token` — JS 可读，POST 时在 body 中回传，服务端比对
 
-## 串口协议
+## 网口配置
 
-与 Remote Board 通信的文本行协议（`\n` 结尾）：
+| 网口 | 说明 |
+|------|------|
+| eth0 | 主网口（管理口），网关优先，变更带 3 分钟回滚保护 |
+| eth1-3 | 扩展网口，无 profile 时首次设置自动创建持久 profile |
 
-| 命令 | 方向 | 响应 |
-|------|------|------|
-| `PING` | → | `OK` |
-| `REMOTE_GET_IPV4` | → | `OK <ip> <mask> <gateway>` |
-| `REMOTE_SET_IPV4 <ip> <mask> <gw>` | → | `OK` |
-| `REMOTE_GET_IPV6` | → | `OK <addr/prefix>` |
-| `REMOTE_SET_IPV6 <addr/prefix>` | → | `OK` |
-
-## Board 配置
-
-| Board | IP | 串口 | 波特率 | CGI 参数 |
-|-------|-----|------|--------|----------|
-| Board 1 | 192.168.8.201 | `/dev/ttyS7` | 115200 | 默认（无 port 参数） |
-| Board 2 | 192.168.8.99 | `/dev/ttyS4` | 38400 | `port=s4` |
-
-Web 控制面板的板卡选项卡由前端注册表（`control_panel.html` 的 `BOARDS`）驱动渲染：
-单一表单按当前 Board 重载各自配置，Board 3/4 以占位 tab 预留。
-
-板表有两处、共享 port 键：协议路由表在 `src/remote.c`（port → device/baud），
-UI 注册表在前端 `BOARDS`（tab 标签 / port 参数 / 占位板）。`test_frontend.py` 断言
-两者双向一致（加板漏改任一侧即红）。CGI 经 `remote_board_lookup()` 查表，未知 port
-返回错误而非静默落到 Board 1。Board 3 上线 = 两张表各加一行。
-
-## Remote Board 部署
-
-将 `handler.sh` 部署到 Remote Board 并修改顶部的 `DEV` 和 `BAUD`：
-
-```bash
-scp handler.sh root@<remote_ip>:/usr/local/bin/
-ssh root@<remote_ip> '
-  sed -i "s|DEV=/dev/ttyS7|DEV=/dev/ttyS4|" /usr/local/bin/handler.sh
-  sed -i "s|BAUD=115200|BAUD=38400|" /usr/local/bin/handler.sh
-  chmod +x /usr/local/bin/handler.sh
-  rm -f /var/run/serial_protocol.lock /var/run/serial_protocol.pid
-  nohup /usr/local/bin/handler.sh > /tmp/handler.log 2>&1 &
-'
-```
-
-handler.sh 特性：PID 清理、串口断开自动重连、flock 防重复启动。
+前端网口标签页由 `control_panel.html` 的 `NICS` 注册表驱动，默认激活 eth0；eth1-3
+未配置时输入框为空。加网口 = 两处各加一行（前端 `NICS` + `nmcli.c` 的 `g_nics`），
+`test_frontend.py` 防漏改。
 
 ## License
 

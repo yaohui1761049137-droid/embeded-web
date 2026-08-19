@@ -26,22 +26,6 @@ char *get_env(const char *key);
  * Returns pointer to static buffer, or NULL if not found. */
 char *get_cookie(const char *name);
 
-/* ── Serial port ──────────────────────────────────────────────────── */
-#define SERIAL_DEVICE       "/dev/ttyFIQ0"
-#define CUSTOM_BAUD         1500000
-
-/* Remote Board devices/bauds live in the remote module's board table
- * (src/remote.c) — the CGI used to pick them via port=s4 if/else. */
-
-int  serial_open(const char *device, unsigned int baudrate);
-int  serial_send(int fd, const char *data, int len);
-void serial_close(int fd);
-
-/* Read one line (until \n) from serial fd with timeout_ms.
- * Returns bytes read (without \n/\r), 0 on timeout, -1 on error.
- * Strips \r; result is NUL-terminated. */
-int  serial_read_line(int fd, char *buf, int max_len, int timeout_ms);
-
 /* ── POST body parsing ────────────────────────────────────────────── */
 /* Extract a parameter value from POST body (x-www-form-urlencoded).
  * Returns a freshly allocated URL-decoded copy, or NULL if the param

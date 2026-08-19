@@ -1,0 +1,16 @@
+# rollback-recover.service — boot-time eth0 rollback recovery (ADR-0003 D10)
+#
+# If a pending eth0 change survived a reboot (power loss before the
+# 3-minute watchdog fired or before anyone logged in), restore the old
+# config.  Confirmed changes (confirmed=1) are simply cleared by the
+# same script.  Install to /etc/systemd/system/ and enable.
+[Unit]
+Description=Recover eth0 network config after reboot (ADR-0003)
+After=NetworkManager.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/rollback_watchdog.sh
+
+[Install]
+WantedBy=multi-user.target

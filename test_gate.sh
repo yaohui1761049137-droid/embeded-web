@@ -5,6 +5,9 @@
 # 验证 gate 模块的 session → role → CSRF 阶梯。依赖 gate 的 DB_PATH
 # 环境变量覆盖特性（默认 /var/db/myapp.db）。
 #
+# 网络配置测试通过 NMCLI_OVERRIDE 指向 fake_nmcli.sh 离线跑
+# （无板子、无 NetworkManager、无 sudo）。
+#
 # Usage: ./test_gate.sh [src_dir]
 # 依赖：宿主机 gcc（sqlite3.c 需 -lpthread -ldl），python3（策略组到期模拟 + DB 校验用）
 
@@ -16,10 +19,7 @@ DB=$WORK/test.db
 PASS=0
 FAIL=0
 
-FAKE_PID=""
-# Cleanup must also kill the pty fake board: an orphaned fake keeps the
-# suite's stderr pipe open, which hangs any wrapper (tail) forever.
-trap 'if [ -n "$FAKE_PID" ]; then kill "$FAKE_PID" 2>/dev/null; wait "$FAKE_PID" 2>/dev/null || true; fi; rm -rf "$WORK"' EXIT
+trap 'rm -rf "$WORK"' EXIT
 
 green() { echo -e "\033[32m$1\033[0m"; }
 red()   { echo -e "\033[31m$1\033[0m"; }
@@ -40,20 +40,18 @@ assert_contains() {
 mkdir -p "$BIN"
 echo "Compiling (host)…"
 gcc -Wall -O2 -c -DSQLITE_THREADSAFE=0 "$SRC/sqlite3.c" -o "$WORK/sqlite3.o"
-for src in login.cgi.c logout.cgi.c main.cgi.c network.cgi.c action.cgi.c \
+for src in login.cgi.c logout.cgi.c main.cgi.c network.cgi.c \
            user_list.cgi.c user_create.cgi.c user_passwd.cgi.c \
            user_toggle.cgi.c user_delete.cgi.c user_change_pass.cgi.c; do
     name=$(echo "$src" | sed 's/\.cgi\.c//').cgi
     gcc -Wall -O2 -o "$BIN/$name" "$SRC/$src" "$SRC/common.c" "$SRC/auth.c" \
-        "$SRC/gate.c" "$SRC/users.c" "$SRC/remote.c" "$SRC/sha256.c" \
+        "$SRC/gate.c" "$SRC/users.c" "$SRC/nmcli.c" "$SRC/sha256.c" \
         "$WORK/sqlite3.o" -lpthread -ldl
 done
 gcc -Wall -O2 -o "$BIN/db_init" "$SRC/db_init.c" "$SRC/auth.c" "$SRC/gate.c" \
     "$SRC/common.c" "$SRC/sha256.c" "$WORK/sqlite3.o" -lpthread -ldl
 gcc -Wall -O2 -o "$BIN/test_users" "$(dirname "$0")/test_users.c" \
     "$SRC/users.c" "$SRC/auth.c" "$SRC/sha256.c" "$WORK/sqlite3.o" -lpthread -ldl
-gcc -Wall -O2 -o "$BIN/test_remote" "$(dirname "$0")/test_remote.c" \
-    "$SRC/remote.c" "$SRC/common.c"
 echo ""
 
 # ── Seed temp DB (root / testpass123) ──────────────────────────────
@@ -109,50 +107,74 @@ RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" "$BIN/main.cgi")
 assert_contains "session passed" "window._currentUser" "$RESP"
 assert_contains "root role injected" 'role:"root"' "$RESP"
 
-# ── Test 7: network.cgi 有效 session → 门卫放行（走到串口层）─────────
-echo "7. JSON gate: valid session (reaches serial layer)"
+# ── Test 7-7f: network.cgi against fake nmcli (NMCLI_OVERRIDE) ──────
+# Offline: no board, no NetworkManager, no sudo.  ROLLBACK_FILE keeps
+# the eth0 rollback state inside the scratch dir instead of /var/db.
+export NMCLI_OVERRIDE="$(dirname "$0")/fake_nmcli.sh"
+export NMCLI_NO_SUDO=1
+export ROLLBACK_FILE="$WORK/rollback.json"
+export FAKE_NMCLI_STATE="$WORK/fake_state"
+
+echo "7. JSON gate: valid session (reaches nmcli layer) — GET eth0"
 RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
-       QUERY_STRING="action=get" "$BIN/network.cgi")
-assert_contains "gate passed (serial error, not auth)" "Cannot open serial port" "$RESP"
+       QUERY_STRING="action=get&port=eth0" "$BIN/network.cgi")
+assert_contains "gate passed (nmcli data, not auth)" '"status":"ok"' "$RESP"
+assert_contains "fake ipv4 parsed" '"ip":"192.168.137.110"' "$RESP"
+assert_contains "fake mask parsed" '"mask":"255.255.255.0"' "$RESP"
+assert_contains "fake dns parsed" '"dns":"8.8.8.8"' "$RESP"
+assert_contains "fake ipv6 parsed" '"ipv6":"2001:db8::1/64"' "$RESP"
 
-# ── Test 7b-7d: network.cgi against pty fake board (offline serial) ──
-FAKE_OUT=$WORK/fake_slave
-python3 "$(dirname "$0")/test_fake_board.py" ok "$WORK/fake.log" > "$FAKE_OUT" &
-FAKE_PID=$!
-while [ ! -s "$FAKE_OUT" ]; do sleep 0.05; done
-FAKE_DEV=$(head -1 "$FAKE_OUT")
-
-echo "7b. network.cgi GET against fake board (pty)"
-RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
-       REMOTE_SERIAL_DEVICE_OVERRIDE="$FAKE_DEV" \
-       QUERY_STRING="action=get" "$BIN/network.cgi")
-assert_contains "status ok" '"status":"ok"' "$RESP"
-assert_contains "fake ipv4 parsed end-to-end" '"ip":"10.0.0.1"' "$RESP"
-
-echo "7c. network.cgi SET against fake board (pty, valid CSRF)"
-BODY="ip=192.168.8.99&mask=255.255.255.0&gateway=192.168.8.1&ipv6=&csrf_token=$CSRF_VAL"
+echo "7b. network.cgi SET eth0 (valid CSRF) → applies + arms rollback"
+BODY="ip=192.168.8.99&mask=255.255.255.0&gateway=192.168.8.1&dns=8.8.8.8,114.114.114.114&ipv6=2001:db8::2/64&csrf_token=$CSRF_VAL"
 RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
-       REMOTE_SERIAL_DEVICE_OVERRIDE="$FAKE_DEV" \
-       QUERY_STRING="action=set" \
+       QUERY_STRING="action=set&port=eth0" \
        REQUEST_METHOD=POST CONTENT_LENGTH=${#BODY} "$BIN/network.cgi")
 assert_contains "configure ok" '"status":"ok"' "$RESP"
 assert_contains "save message" "保存成功" "$RESP"
+RB=$(cat "$WORK/rollback.json" 2>/dev/null)
+assert_contains "rollback armed (confirmed=0)" "confirmed=0" "$RB"
+assert_contains "rollback old cidr" "old_cidr=192.168.137.110/24" "$RB"
+assert_contains "rollback new cidr" "new_cidr=192.168.8.99/24" "$RB"
 
-echo "7d. Unknown board port rejected"
+echo "7c. GET eth0 reflects applied config"
 RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
-       REMOTE_SERIAL_DEVICE_OVERRIDE="$FAKE_DEV" \
+       QUERY_STRING="action=get&port=eth0" "$BIN/network.cgi")
+assert_contains "new ip" '"ip":"192.168.8.99"' "$RESP"
+assert_contains "new dns (list joined)" '"dns":"8.8.8.8,114.114.114.114"' "$RESP"
+assert_contains "new ipv6" '"ipv6":"2001:db8::2/64"' "$RESP"
+
+echo "7d. Unknown NIC rejected"
+RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
        QUERY_STRING="action=get&port=zz" "$BIN/network.cgi")
-assert_contains "invalid board" "Invalid board" "$RESP"
+assert_contains "invalid nic" "无效的网口" "$RESP"
 
-echo "7e. Board 2 (port=s4) via fake board"
+echo "7e. eth1: no profile → auto-created on set, then readable"
+BODY="ip=10.0.0.5&mask=255.255.255.0&gateway=10.0.0.1&dns=&ipv6=&csrf_token=$CSRF_VAL"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       QUERY_STRING="action=set&port=eth1" \
+       REQUEST_METHOD=POST CONTENT_LENGTH=${#BODY} "$BIN/network.cgi")
+assert_contains "eth1 set ok" '"status":"ok"' "$RESP"
+CALLS=$(cat "$FAKE_NMCLI_STATE/calls.log")
+assert_contains "profile auto-create invoked" "connection add type ethernet ifname eth1 con-name eth1" "$CALLS"
 RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
-       REMOTE_SERIAL_DEVICE_OVERRIDE="$FAKE_DEV" \
-       QUERY_STRING="action=get&port=s4" "$BIN/network.cgi")
-assert_contains "board 2 query ok" '"status":"ok"' "$RESP"
-assert_contains "board 2 ipv4" '"ip":"10.0.0.1"' "$RESP"
-kill "$FAKE_PID" 2>/dev/null
-wait "$FAKE_PID" 2>/dev/null || true
-FAKE_PID=""
+       QUERY_STRING="action=get&port=eth1" "$BIN/network.cgi")
+assert_contains "eth1 ip" '"ip":"10.0.0.5"' "$RESP"
+
+echo "7f. Gateway migration: setting eth0 gateway clears eth2's"
+echo 'Wired connection 2|aaaaaaaa-2222-2222-2222-222222222222|eth2|192.168.8.20/24|192.168.8.1|10.10.10.10|' >> "$FAKE_NMCLI_STATE/profiles"
+BODY="ip=192.168.8.99&mask=255.255.255.0&gateway=192.168.9.1&dns=8.8.8.8,114.114.114.114&ipv6=2001:db8::2/64&csrf_token=$CSRF_VAL"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       QUERY_STRING="action=set&port=eth0" \
+       REQUEST_METHOD=POST CONTENT_LENGTH=${#BODY} "$BIN/network.cgi")
+assert_contains "migration set ok" '"status":"ok"' "$RESP"
+ETH2=$(grep '^Wired connection 2|' "$FAKE_NMCLI_STATE/profiles")
+if echo "$ETH2" | grep -q '192.168.8.20/24||10.10.10.10'; then
+    green "  ✅ eth2 gateway cleared, ip/dns preserved"
+    PASS=$((PASS + 1))
+else
+    red "  ❌ eth2 gateway not cleared: $ETH2"
+    FAIL=$((FAIL + 1))
+fi
 
 # ── Test 8: root 角色 → user_list 放行 ──────────────────────────────
 echo "8. Role ladder: root allowed"
@@ -238,11 +260,6 @@ else
     green "  ✅ 11e: testadmin gone from user list"
     PASS=$((PASS + 1))
 fi
-
-# ── Test 12: action.cgi 有效 session → 门卫放行（此前零测试）────────
-echo "12. action.cgi: valid session (reaches serial layer)"
-RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" "$BIN/action.cgi")
-assert_contains "gate passed (serial error, not auth)" "Cannot open /dev/ttyFIQ0" "$RESP"
 
 # ── Test 13: login GET 有效 session → 跳 main ───────────────────────
 echo "13. Login GET: valid session → redirect main"
@@ -336,7 +353,7 @@ RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID2B; $CSRF2B" \
 assert_contains "kicked session dead" "Not authenticated" "$RESP"
 RESP=$(DB_PATH="$DB" HTTP_COOKIE="$ADMIN_SID; $ADMIN_CSRF" \
        QUERY_STRING="action=get" "$BIN/network.cgi")
-assert_contains "current session alive" "Cannot open serial port" "$RESP"
+assert_contains "current session alive (gate passed)" "无效的网口" "$RESP"
 
 echo "25. Login with new password"
 BODY="user=testadmin2&pass=NewPass456!"
@@ -371,7 +388,7 @@ RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$EXP_SID; $EXP_CSRF" \
 assert_contains "change ok" '"status":"ok"' "$RESP"
 RESP=$(DB_PATH="$DB" HTTP_COOKIE="$EXP_SID; $EXP_CSRF" \
        QUERY_STRING="action=get" "$BIN/network.cgi")
-assert_contains "recovered, gate passes again" "Cannot open serial port" "$RESP"
+assert_contains "recovered, gate passes again" "无效的网口" "$RESP"
 
 # ── Users module unit tests (direct API, offline) ──────────────────
 echo ""
@@ -385,21 +402,6 @@ if [ $TU_RC -ne 0 ]; then
     FAIL=$((FAIL + 1))
 else
     green "  ✅ users module tests passed"
-    PASS=$((PASS + 1))
-fi
-
-# ── Remote module unit tests (pty fake board, offline) ─────────────
-echo ""
-echo "── Remote module unit tests ──"
-set +e
-"$BIN/test_remote" "$(dirname "$0")/test_fake_board.py"
-TR_RC=$?
-set -e
-if [ $TR_RC -ne 0 ]; then
-    red "  ❌ remote module tests failed (rc=$TR_RC)"
-    FAIL=$((FAIL + 1))
-else
-    green "  ✅ remote module tests passed"
     PASS=$((PASS + 1))
 fi
 

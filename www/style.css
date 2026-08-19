@@ -1,5 +1,5 @@
 /* ============================================
-   Zynq Web Control - Stylesheet
+   LubanCat 2N Web Control - Stylesheet
    ============================================ */
 
 * {
@@ -249,20 +249,12 @@ body {
     z-index: 10;
 }
 
-.nav-brand {
-    font-family: "Playfair Display", Georgia, serif;
-    font-weight: 600;
-    font-size: 1.05rem;
-    color: #3d3d4a;
-    margin-right: 2rem;
-    white-space: nowrap;
-}
-
 .nav-links {
     display: flex;
     gap: 0.15rem;
     overflow-x: auto;
     flex: 1;
+    justify-content: center;
     -ms-overflow-style: none;
     scrollbar-width: none;
 }
@@ -361,53 +353,6 @@ body {
     color: #b0b0be;
     font-size: 0.9rem;
     padding: 3rem 0;
-}
-
-/* Send section (tab: status) */
-
-.send-section {
-    background: rgba(255, 255, 255, 0.5);
-    border-radius: 12px;
-    padding: 1.5rem;
-    border: 1px solid rgba(255, 255, 255, 0.6);
-}
-
-.send-section h3 {
-    font-size: 1rem;
-    color: #3d3d4a;
-    margin-bottom: 1rem;
-    font-weight: 500;
-}
-
-button#sendBtn {
-    width: 100%;
-    padding: 0.85rem;
-    border: none;
-    border-radius: 10px;
-    background: linear-gradient(135deg, #d4c4d8 0%, #c4b5d0 100%);
-    color: #fff;
-    font-family: inherit;
-    font-size: 1rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: transform 0.15s, box-shadow 0.2s;
-}
-
-button#sendBtn:hover:not(:disabled) {
-    transform: translateY(-1px);
-    box-shadow: 0 6px 20px rgba(196, 181, 208, 0.25);
-}
-
-button#sendBtn:disabled {
-    background: #d8d8e0;
-    color: #aaa;
-    cursor: not-allowed;
-    transform: none;
-    box-shadow: none;
-}
-
-#result {
-    margin-top: 1rem;
 }
 
 .success {

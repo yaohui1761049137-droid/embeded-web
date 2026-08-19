@@ -7,6 +7,37 @@
 #include "auth.h"
 #include "gate.h"
 
+/* ADR-0003 D10: a successful web login confirms any pending eth0
+ * rollback (keeps the new config, cancels the watchdog).  Best-effort:
+ * no file means nothing is pending.  Atomic via tmp+rename so the
+ * watchdog never observes a half-written state. */
+static void confirm_rollback(void) {
+    const char *path = getenv("ROLLBACK_FILE");
+    if (!path || !*path) path = "/var/db/rollback.json";
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+
+    char tmp_path[256];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
+    FILE *t = fopen(tmp_path, "w");
+    if (!t) { fclose(f); return; }
+
+    char line[256];
+    int changed = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "confirmed=0", 11) == 0) {
+            fputs("confirmed=1\n", t);
+            changed = 1;
+        } else {
+            fputs(line, t);
+        }
+    }
+    fclose(f);
+    fclose(t);
+    if (changed) rename(tmp_path, path);
+    else         remove(tmp_path);
+}
+
 int main(void) {
     const char *method = get_env("REQUEST_METHOD");
 
@@ -57,6 +88,8 @@ int main(void) {
         auth_cleanup();
         return 0;
     }
+
+    confirm_rollback();
 
     /* ADR-0002: password expired/never set → forced change first */
     const char *dest = auth_user_must_change_password(user_id)
