@@ -5,6 +5,9 @@
 通过 NetworkManager（nmcli）对开发板本机网卡（eth0-3）进行网络参数配置：静态 IPv4（IP/掩码/网关）、
 可选 DNS、静态 IPv6，支持网卡切换与 eth0 变更自动回滚。
 
+「时间服务校验设置」Tab 展示 PPS+TOD+chrony 授时状态（chronyc sources/tracking + pps_tod 状态文件），
+并可切换 UT986 GNSS 接收机工作模式（GNSS 全系统 / GPS / 北斗 / Galileo / GLONASS）。
+
 ## 功能
 
 - **HTTPS 加密传输**（TLS 1.2+，HSTS，自签名证书）
@@ -16,9 +19,11 @@
 - **唯一网关约束**（新配置生效时自动清空其他网口的网关，避免多默认路由）
 - **eth0 回滚保护**（变更后 3 分钟登录信号超时自动回滚旧配置，掉电重启后恢复）
 - **用户管理 API**（root 可创建/启用/禁用/删除 admin 用户，含审计日志）
-- **业务审计日志**（网络配置修改自动记录操作者和时间到 `audit_log` 表）
+- **时间同步监控**（PPS+TOD+chrony 实时状态：授时源/系统偏差/RMS/频偏/看门狗，3 秒轮询）
+- **接收机模式切换**（UT986 五种模式，CSRF + 枚举白名单后写 ttyS7 固定载荷，掉电保持）
+- **业务审计日志**（网络配置修改、接收机模式切换自动记录操作者和时间到 `audit_log` 表）
 - **SQLite 存储**（WAL 模式，多进程 CGI 并发安全）
-- **72 项自动化测试**（`test_gate.sh`，宿主机离线全绿，含 NMCLI_OVERRIDE 假命令）
+- **94 项自动化测试**（`test_gate.sh`，宿主机离线全绿，含 NMCLI_OVERRIDE / CHRONYC_OVERRIDE 假命令）
 
 ## 架构
 
@@ -42,9 +47,11 @@
 │  + auth.c (SQLite/审计/策略) │
 │  + users.c (用户管理/自改密) │
 │  + nmcli.c (本地网卡配置库)  │  ← fork/execvp，无 shell，参数白名单校验
+│  + timesync.c (时间同步/串口)│  ← chronyc 读取 + 固定载荷写 ttyS7
 │  + common.c (HTTP/POST)      │
 │                              │
 │  network.cgi ?port=eth0 ─────│  ← nmcli 读写 + 回滚编排 + 审计
+│  timesync.cgi ?action=... ───│  ← chrony/pps_tod 状态 + UT986 模式切换
 │                              │
 │  audit_log (业务操作)        │
 └──────────────┬───────────────┘
@@ -54,6 +61,12 @@
 │   SQLite DB   │   │  NetworkManager (系统服务)     │
 │  /var/db/     │   │  nmcli ← sudoers 白名单        │
 └──────────────┘   │  配置文件在 /etc/NetworkManager │
+                   └───────────────────────────────┘
+                   ┌───────────────────────────────┐
+                   │  chrony / pps_tod (系统服务)   │
+                   │  chronyc 本地查询（无特权）     │
+                   │  /run/pps_tod 状态文件（0644）  │
+                   │  /dev/ttyS7 ← www-data dialout │
                    └───────────────────────────────┘
 ```
 
@@ -159,9 +172,10 @@ ssh root@<board> '
 
   for src in login.cgi.c logout.cgi.c main.cgi.c network.cgi.c \
              user_list.cgi.c user_create.cgi.c user_passwd.cgi.c \
-             user_toggle.cgi.c user_delete.cgi.c user_change_pass.cgi.c; do
+             user_toggle.cgi.c user_delete.cgi.c user_change_pass.cgi.c \
+             timesync.cgi.c; do
     name=$(echo $src | sed "s/\.cgi\.c//" | sed "s/\.c//").cgi
-    gcc -Wall -O2 -o $name $src common.c auth.c gate.c users.c nmcli.c sha256.c sqlite3.o -lpthread -ldl
+    gcc -Wall -O2 -o $name $src common.c auth.c gate.c users.c nmcli.c timesync.c sha256.c sqlite3.o -lpthread -ldl
   done
 
   # 初始化数据库
@@ -184,6 +198,10 @@ www-data ALL=(ALL) NOPASSWD: /usr/bin/nmcli -t -f NAME\\,UUID connection show, /
 EOF
   chmod 440 /etc/sudoers.d/99-www-nmcli
   visudo -cf /etc/sudoers.d/99-www-nmcli
+
+  # 3b. www-data 加入 dialout 组（timesync.cgi 写 /dev/ttyS7 控制 UT986 接收机）
+  usermod -aG dialout www-data
+  systemctl restart lighttpd   # 组变更对新 CGI 进程生效
 
   # 4. 回滚看门狗 + 开机恢复服务
   cp rollback_watchdog.sh /usr/local/bin/
@@ -227,15 +245,20 @@ EOF
 ./test_gate.sh
 ```
 
-`test_gate.sh` 内置四层，共 72 项：
+`test_gate.sh` 内置四层，共 92 项：
 - CGI 级门卫测试（gate 阶梯 + 登录/登出 + 用户 CRUD 冒烟）
 - API 级用户模块测试（`test_users.c` 直接断言 users 模块的不变量：自删/删 root/禁最后
   root 拒绝、审计行 target_user_id 正确）
 - 网络配置测试（Test 7-7f）：`NMCLI_OVERRIDE` 指向 `fake_nmcli.sh` 离线跑 network.cgi——
   eth0 读回、SET + 回滚文件断言（`ROLLBACK_FILE`）、非法网口拒绝、eth1 自动建 profile、
   网关自动迁移；`NMCLI_NO_SUDO=1` 跳过 sudo 前缀
+- 时间同步测试（Test 27-27f）：`CHRONYC_OVERRIDE` 指向 `fake_chronyc.sh` + `TIMESYNC_DEV`/
+  `TIMESYNC_STATUS_DIR` 指向临时文件，离线跑 timesync.cgi——status 解析（chrony CSV 含
+  hex 解码、pps_tod/看门狗状态文件）、状态文件缺失降级、setmode 无 CSRF/非法模式拒绝、
+  写入串口的 $CFGGNSS/$CFGSAVE 载荷与校验和逐字节断言
 - 前端注册表一致性：`test_frontend.py` 解析 `control_panel.html` 的 `NICS` 与
-  `nmcli.c` 的 `g_nics`，断言网口列表双向一致（渲染本身由浏览器截图核对）
+  `nmcli.c` 的 `g_nics`，断言网口列表双向一致；并断言 timesync.cgi 的
+  status/setmode 两个 action 在前端 URL 与 C 端处理器同步存在（渲染本身由浏览器截图核对）
 
 板端端到端测试（需 LubanCat 在线，配置真实 nmcli；凭据按环境传入）：
 
@@ -246,7 +269,9 @@ EOF
 > 门卫模块（gate.c）读取 `DB_PATH` 环境变量覆盖数据库路径（默认 `/var/db/myapp.db`），
 > 使 CGI 二进制可在宿主机以受控环境变量离线运行——`test_gate.sh` 依赖此特性。
 > 同理，nmcli 调用读取 `NMCLI_OVERRIDE` 覆盖可执行文件、`NMCLI_NO_SUDO=1` 去掉 sudo，
-> 使网络配置测试可用假命令离线进行。
+> 使网络配置测试可用假命令离线进行。timesync.cgi 读取 `CHRONYC_OVERRIDE`（chronyc 可
+> 执行文件）、`TIMESYNC_DEV`（串口设备，默认 /dev/ttyS7）、`TIMESYNC_STATUS_DIR`
+> （状态文件目录，默认 /run/pps_tod），使时间同步测试同样可离线运行。
 
 ## 安全模型
 
@@ -258,6 +283,7 @@ EOF
 | CSRF | 双 Cookie：`session_id`(HttpOnly) + `csrf_token`(JS可读)，POST 需回传 |
 | 权限 | root/admin 角色分离，root 保护（不可自删/不可禁最后一个 root） |
 | 系统命令 | nmcli 经 www-data sudoers NOPASSWD 白名单放行；参数先白名单/格式双重校验，fork/execvp 无 shell |
+| 串口控制 | timesync.cgi 仅向 /dev/ttyS7 写固定字节载荷（5 种 UT986 模式 × 固定校验和），枚举白名单 + CSRF；写入经 dialout 组授权，不读串口（避免抢走 pps_tod 的 NMEA） |
 | 审计 | `audit_log` 表记录所有管理操作 |
 | SQL | 参数化查询（SQLite prepared statements） |
 

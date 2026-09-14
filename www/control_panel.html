@@ -185,8 +185,66 @@ if (!document.cookie.match(/csrf_token=/)) {
 </div>
 
 <div id="tab-timesync" class="tab-content">
+<style>
+/* timesync tab only: long raw values (chrony samples, watchdog epoch
+   lists) must wrap instead of overflowing the cell/panel.  The global
+   .config-label is 130px + nowrap, which the long bilingual labels
+   here would spill out of — allow wrapping and give them more room. */
+#tab-timesync .config-table { table-layout: fixed; width: 100%; }
+#tab-timesync .config-label { white-space: normal; width: 180px; }
+#tab-timesync .config-value { overflow-wrap: anywhere; word-break: break-word; }
+</style>
 <h2>时间服务校验设置</h2>
-<p class="placeholder-text">开发中...</p>
+
+<!-- PPS+TOD+chrony 授时状态（timesync.cgi 每 3s 轮询刷新） -->
+<div class="config-panel">
+<div class="panel-header">PPS + TOD + chrony 授时状态</div>
+<div class="panel-body">
+<table class="config-table">
+<tr><td class="config-label">授时源</td><td class="config-value" id="ts-src">—</td></tr>
+<tr><td class="config-label">源可达率 (Reach)</td><td class="config-value" id="ts-src-reach">—</td></tr>
+<tr><td class="config-label">最近采样</td><td class="config-value" id="ts-src-last">—</td></tr>
+<tr><td class="config-label">系统时钟偏差 (System time)</td><td class="config-value" id="ts-sys-time">—</td></tr>
+<tr><td class="config-label">最近偏移 (Last offset)</td><td class="config-value" id="ts-last-offset">—</td></tr>
+<tr><td class="config-label">RMS 偏移</td><td class="config-value" id="ts-rms-offset">—</td></tr>
+<tr><td class="config-label">时钟频偏 (Frequency)</td><td class="config-value" id="ts-freq">—</td></tr>
+<tr><td class="config-label">闰秒 (Leap)</td><td class="config-value" id="ts-leap">—</td></tr>
+<tr><td class="config-label">层级 (Stratum)</td><td class="config-value" id="ts-stratum">—</td></tr>
+<tr><td class="config-label">PPS 样本状态</td><td class="config-value" id="ts-good">—</td></tr>
+<tr><td class="config-label">PPS 当前偏移 (offset_us)</td><td class="config-value" id="ts-offset-us">—</td></tr>
+<tr><td class="config-label">最近合格样本 (s)</td><td class="config-value" id="ts-last-good">—</td></tr>
+<tr><td class="config-label">门控计数 (sec_gated)</td><td class="config-value" id="ts-gated">—</td></tr>
+<tr><td class="config-label">状态文件新鲜度</td><td class="config-value" id="ts-pps-fresh">—</td></tr>
+<tr><td class="config-label">看门狗</td><td class="config-value" id="ts-wd">—</td></tr>
+<tr><td class="config-label">更新时间</td><td class="config-value" id="ts-updated">—</td></tr>
+</table>
+<span id="timesync-status"></span>
+</div>
+</div>
+
+<!-- UT986 接收机工作模式（$CFGGNSS + $CFGSAVE） -->
+<div class="config-panel">
+<div class="panel-header">UT986 接收机工作模式</div>
+<div class="panel-body">
+<table class="config-table">
+<tr>
+<td class="config-label">接收机模式</td>
+<td class="config-value">
+<label><input type="radio" name="rx-mode" value="gnss" checked> GNSS 全系统（GPS+北斗+Galileo+GLONASS，出厂默认）</label><br>
+<label><input type="radio" name="rx-mode" value="gps"> GPS</label><br>
+<label><input type="radio" name="rx-mode" value="bds"> 北斗 BDS</label><br>
+<label><input type="radio" name="rx-mode" value="gal"> Galileo</label><br>
+<label><input type="radio" name="rx-mode" value="glo"> GLONASS</label>
+</td>
+</tr>
+</table>
+<p class="tab-status">切换后接收机重新捕获卫星，PPS/TOD 同步可能短暂中断（数十秒），看门狗会自动恢复；选择结果已保存（掉电保持）。</p>
+<div class="panel-actions">
+<button class="btn-set" onclick="applyReceiverMode()">应用模式</button>
+</div>
+</div>
+</div>
+
 </div>
 
 <div id="tab-redundancy" class="tab-content">
@@ -774,9 +832,131 @@ function deleteUser(id, username) {
     xhr.onerror = function() { setUserStatus('网络错误', 'error'); };
     xhr.send(params);
 }
-// ===========================================================
+// ================================================================
+//   Time Sync — PPS/TOD/chrony status + UT986 receiver mode (Tab 5)
+//   ================================================================
+
+function tsSetStatus(msg, type) {
+    var el = document.getElementById('timesync-status');
+    if (!el) return;
+    el.textContent = msg;
+    el.className = 'status-msg status-' + type;
+}
+
+function tsSet(id, text) {
+    var el = document.getElementById(id);
+    if (el) el.textContent = (text === undefined || text === '') ? '—' : text;
+}
+
+function loadTimesyncStatus() {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/cgi-bin/timesync.cgi?action=status', true);
+    xhr.onload = function() {
+        if (xhr.status != 200) { tsSetStatus('查询失败 (HTTP ' + xhr.status + ')', 'error'); return; }
+        try {
+            var r = JSON.parse(xhr.responseText);
+            if (r.status != 'ok') { tsSetStatus('错误: ' + (r.message || ''), 'error'); return; }
+            renderTimesync(r);
+            tsSetStatus('已更新', 'success');
+        } catch(e) { tsSetStatus('解析失败', 'error'); }
+    };
+    xhr.onerror = function() { tsSetStatus('网络错误', 'error'); };
+    xhr.send();
+}
+
+/* chrony 3.x sources CSV joins several numbers after last_rx; the UI
+   only wants the first (the actual last sample offset). */
+function tsFirst(v) {
+    if (!v) return v;
+    var i = v.indexOf(',');
+    return i > 0 ? v.slice(0, i) : v;
+}
+
+function renderTimesync(r) {
+    var c = r.chrony || {};
+    if (c.ok && c.sources && c.sources.length > 0) {
+        var s = c.sources[0];
+        tsSet('ts-src', s.ms + ' ' + s.name);
+        tsSet('ts-src-reach', s.reach);
+        tsSet('ts-src-last', tsFirst(s.last_sample));
+    } else {
+        tsSet('ts-src', 'chronyc 不可用');
+        tsSet('ts-src-reach', '—');
+        tsSet('ts-src-last', '—');
+    }
+    var t = c.tracking || {};
+    tsSet('ts-sys-time', t.system_time);
+    tsSet('ts-last-offset', t.last_offset);
+    tsSet('ts-rms-offset', t.rms_offset);
+    tsSet('ts-freq', t.frequency);
+    tsSet('ts-leap', t.leap_status);
+    tsSet('ts-stratum', t.stratum);
+
+    var p = r.pps_tod || {};
+    if (p.ok) {
+        tsSet('ts-good', p.good === '1' ? '合格' : '不合格');
+        tsSet('ts-offset-us', p.offset_us !== undefined && p.offset_us !== '' ? p.offset_us + ' µs' : '—');
+        tsSet('ts-last-good', p.last_good_age_s);
+        tsSet('ts-gated', p.sec_gated);
+        tsSet('ts-pps-fresh', p.age_s <= 5 ? '新鲜' : '过期 (' + p.age_s + 's)');
+    } else {
+        tsSet('ts-good', '状态文件不可用');
+        tsSet('ts-offset-us', '—');
+        tsSet('ts-last-good', '—');
+        tsSet('ts-gated', '—');
+        tsSet('ts-pps-fresh', '—');
+    }
+
+    var w = r.watchdog || {};
+    if (w.ok) {
+        tsSet('ts-wd', w.mode + (w.strikes ? ' (strikes: ' + w.strikes + ')' : ''));
+    } else {
+        tsSet('ts-wd', '不可用');
+    }
+    tsSet('ts-updated', r.ts);
+}
+
+var TS_MODE_LABELS = { gnss: 'GNSS 全系统', gps: 'GPS', bds: '北斗', gal: 'Galileo', glo: 'GLONASS' };
+
+function applyReceiverMode() {
+    var radios = document.querySelectorAll('input[name="rx-mode"]');
+    var mode = '';
+    for (var i = 0; i < radios.length; i++) {
+        if (radios[i].checked) { mode = radios[i].value; break; }
+    }
+    if (!mode || !TS_MODE_LABELS[mode]) return;
+    if (!confirm('确认将接收机切换为「' + TS_MODE_LABELS[mode] + '」模式？\n\n'
+               + '切换后接收机重新捕获卫星，PPS/TOD 同步可能短暂中断数十秒（看门狗会自动恢复）。')) {
+        return;
+    }
+
+    tsSetStatus('发送中...', 'info');
+    var params = 'mode=' + encodeURIComponent(mode) +
+                 '&csrf_token=' + encodeURIComponent(getCSRF());
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/cgi-bin/timesync.cgi?action=setmode', true);
+    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+    xhr.onload = function() {
+        if (xhr.status == 200) {
+            try {
+                var r = JSON.parse(xhr.responseText);
+                if (r.status == 'ok') {
+                    tsSetStatus('模式命令已发送，生效以状态数据为准', 'success');
+                } else {
+                    tsSetStatus('错误: ' + r.message, 'error');
+                }
+            } catch(e) { tsSetStatus('解析失败', 'error'); }
+        } else { tsSetStatus('发送失败 (HTTP ' + xhr.status + ')', 'error'); }
+    };
+    xhr.onerror = function() { tsSetStatus('网络错误', 'error'); };
+    xhr.send(params);
+}
+
+// Initialize
 setupOctetHandlers();
 buildNICTabs();
+loadTimesyncStatus();
+setInterval(loadTimesyncStatus, 3000);
 </script>
 
 </body>

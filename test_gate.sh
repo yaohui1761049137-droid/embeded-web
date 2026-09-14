@@ -42,10 +42,12 @@ echo "Compiling (host)…"
 gcc -Wall -O2 -c -DSQLITE_THREADSAFE=0 "$SRC/sqlite3.c" -o "$WORK/sqlite3.o"
 for src in login.cgi.c logout.cgi.c main.cgi.c network.cgi.c \
            user_list.cgi.c user_create.cgi.c user_passwd.cgi.c \
-           user_toggle.cgi.c user_delete.cgi.c user_change_pass.cgi.c; do
+           user_toggle.cgi.c user_delete.cgi.c user_change_pass.cgi.c \
+           timesync.cgi.c; do
     name=$(echo "$src" | sed 's/\.cgi\.c//').cgi
     gcc -Wall -O2 -o "$BIN/$name" "$SRC/$src" "$SRC/common.c" "$SRC/auth.c" \
-        "$SRC/gate.c" "$SRC/users.c" "$SRC/nmcli.c" "$SRC/sha256.c" \
+        "$SRC/gate.c" "$SRC/users.c" "$SRC/nmcli.c" "$SRC/timesync.c" \
+        "$SRC/sha256.c" \
         "$WORK/sqlite3.o" -lpthread -ldl
 done
 gcc -Wall -O2 -o "$BIN/db_init" "$SRC/db_init.c" "$SRC/auth.c" "$SRC/gate.c" \
@@ -389,6 +391,105 @@ assert_contains "change ok" '"status":"ok"' "$RESP"
 RESP=$(DB_PATH="$DB" HTTP_COOKIE="$EXP_SID; $EXP_CSRF" \
        QUERY_STRING="action=get" "$BIN/network.cgi")
 assert_contains "recovered, gate passes again" "无效的网口" "$RESP"
+
+# ── Test 27-27f: timesync.cgi — status & receiver mode (offline) ────
+# Offline: no board, no chronyd, no serial port.  CHRONYC_OVERRIDE
+# swaps chronyc for fake_chronyc.sh; TIMESYNC_STATUS_DIR / TIMESYNC_DEV
+# point at scratch files instead of /run/pps_tod and /dev/ttyS7.
+export CHRONYC_OVERRIDE="$(dirname "$0")/fake_chronyc.sh"
+export TIMESYNC_STATUS_DIR="$WORK/ts_state"
+export TIMESYNC_DEV="$WORK/ts_dev"
+mkdir -p "$TIMESYNC_STATUS_DIR"
+cat > "$TIMESYNC_STATUS_DIR/status" <<'EOF'
+ts=2026-09-14 11:00:00
+good=1
+last_good_age_s=0
+offset_us=+23
+anchor_fresh=1
+sec_gated=0
+sec_noedge=0
+sec_noanchor=0
+sec_badtod=0
+rt_vs_mono_us=0
+EOF
+cat > "$TIMESYNC_STATUS_DIR/watchdog.state" <<'EOF'
+ts=2026-09-14 11:00:01
+mode=OK
+bad_since=0
+last_action=0
+observe_until=0
+strikes=
+EOF
+: > "$TIMESYNC_DEV"
+
+echo "27. timesync status: chrony + state files parsed"
+RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       QUERY_STRING="action=status" "$BIN/timesync.cgi")
+assert_contains "status ok" '"status":"ok"' "$RESP"
+assert_contains "source PPS parsed" '"name":"PPS"' "$RESP"
+assert_contains "flags+state merged (chrony 3.x layout)" '"ms":"#\*"' "$RESP"
+assert_contains "reach parsed" '"reach":"377"' "$RESP"
+assert_contains "last sample hex-decoded (chrony 4.x row)" "46us" "$RESP"
+assert_contains "tracking system time" '"system_time":"0.000001438"' "$RESP"
+assert_contains "tracking ref name (14-col layout)" '"ref_name":"PPS"' "$RESP"
+assert_contains "tracking leap status" '"leap_status":"Normal"' "$RESP"
+assert_contains "pps_tod good" '"good":"1"' "$RESP"
+assert_contains "pps_tod offset" '"offset_us":"+23"' "$RESP"
+assert_contains "watchdog mode" '"mode":"OK"' "$RESP"
+assert_contains "freshness emitted" '"age_s"' "$RESP"
+
+echo "27b. timesync status: missing state files degrade gracefully"
+rm -f "$TIMESYNC_STATUS_DIR/status" "$TIMESYNC_STATUS_DIR/watchdog.state"
+RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       QUERY_STRING="action=status" "$BIN/timesync.cgi")
+assert_contains "still ok" '"status":"ok"' "$RESP"
+assert_contains "pps_tod degraded" '"pps_tod":{"ok":false,"age_s":-1}' "$RESP"
+assert_contains "watchdog degraded" '"watchdog":{"ok":false,"age_s":-1}' "$RESP"
+
+echo "27c. setmode missing CSRF → rejected"
+BODY="mode=gps"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       QUERY_STRING="action=setmode" REQUEST_METHOD=POST \
+       CONTENT_LENGTH=${#BODY} "$BIN/timesync.cgi")
+assert_contains "csrf rejected" "CSRF token invalid" "$RESP"
+
+echo "27d. setmode invalid mode → rejected (whitelist)"
+BODY="mode=wifi&csrf_token=$CSRF_VAL"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       QUERY_STRING="action=setmode" REQUEST_METHOD=POST \
+       CONTENT_LENGTH=${#BODY} "$BIN/timesync.cgi")
+assert_contains "invalid mode" "无效的接收机模式" "$RESP"
+
+echo "27e. setmode valid mode → exact payload bytes on device"
+BODY="mode=bds&csrf_token=$CSRF_VAL"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       QUERY_STRING="action=setmode" REQUEST_METHOD=POST \
+       CONTENT_LENGTH=${#BODY} "$BIN/timesync.cgi")
+assert_contains "command sent" '"status":"ok"' "$RESP"
+assert_contains "mode echoed" '"mode":"bds"' "$RESP"
+printf '$CFGGNSS,h70*08\r\n$CFGSAVE,h10*06\r\n' > "$WORK/ts_expect"
+if cmp -s "$WORK/ts_expect" "$TIMESYNC_DEV"; then
+    green "  ✅ payload + checksums byte-exact (bds)"
+    PASS=$((PASS + 1))
+else
+    red "  ❌ payload mismatch: $(od -c "$TIMESYNC_DEV" | head -3)"
+    FAIL=$((FAIL + 1))
+fi
+
+echo "27f. setmode gnss (factory default) payload"
+BODY="mode=gnss&csrf_token=$CSRF_VAL"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       QUERY_STRING="action=setmode" REQUEST_METHOD=POST \
+       CONTENT_LENGTH=${#BODY} "$BIN/timesync.cgi")
+assert_contains "command sent" '"status":"ok"' "$RESP"
+printf '$CFGGNSS,h70717D*7D\r\n$CFGSAVE,h10*06\r\n' > "$WORK/ts_expect2"
+if cmp -s "$WORK/ts_expect2" "$TIMESYNC_DEV"; then
+    green "  ✅ payload + checksums byte-exact (gnss)"
+    PASS=$((PASS + 1))
+else
+    red "  ❌ payload mismatch: $(od -c "$TIMESYNC_DEV" | head -3)"
+    FAIL=$((FAIL + 1))
+fi
 
 # ── Users module unit tests (direct API, offline) ──────────────────
 echo ""

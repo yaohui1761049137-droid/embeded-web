@@ -13,6 +13,7 @@ db_init
 # IDE
 .vscode/
 .idea/
+.zcode/
 
 # OS
 .DS_Store
