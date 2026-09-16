@@ -27,6 +27,7 @@
 
 #define TS_DEV_DEFAULT   "/dev/ttyS7"
 #define TS_DIR_DEFAULT   "/run/pps_tod"
+#define TS_MODEFILE_DEFAULT "/var/db/ut986_mode"
 #define TS_MAX_SOURCES   8
 
 /* ── Receiver modes (fixed whitelist, UT986 spec 1.4.2.7) ───────────
@@ -87,6 +88,64 @@ int timesync_set_mode(TimesyncMode m, char *err, size_t errlen) {
         return -1;
     }
     return 0;
+}
+
+/* ── Last-set mode bookkeeping (UI display) ─────────────────────────
+ * The receiver cannot be queried online (the RX path belongs to
+ * pps_tod), so the UI shows the mode last applied through this
+ * system.  Written atomically (tmp+rename) like the daemon's status
+ * files. */
+
+static const char *ts_modefile_path(void) {
+    const char *p = getenv("TIMESYNC_MODE_FILE");
+    return (p && *p) ? p : TS_MODEFILE_DEFAULT;
+}
+
+int timesync_mode_save(TimesyncMode m, char *err, size_t errlen) {
+    if (m <= TS_MODE_UNKNOWN || m > TS_MODE_GLO) {
+        snprintf(err, errlen, "无效的接收机模式");
+        return -1;
+    }
+    const char *path = ts_modefile_path();
+    char tmp[320], now[32];
+    snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+    time_t t = time(NULL);
+    struct tm tm;
+    localtime_r(&t, &tm);
+    strftime(now, sizeof(now), "%Y-%m-%d %H:%M:%S", &tm);
+
+    FILE *f = fopen(tmp, "w");
+    if (!f) {
+        snprintf(err, errlen, "无法写入 %s: %s", tmp, strerror(errno));
+        return -1;
+    }
+    fprintf(f, "mode=%s\nts=%s\n", g_modes[m - 1].name, now);
+    if (fclose(f) != 0 || rename(tmp, path) != 0) {
+        snprintf(err, errlen, "无法更新 %s: %s", path, strerror(errno));
+        return -1;
+    }
+    return 0;
+}
+
+int timesync_mode_last(char *out, size_t outlen, char *ts, size_t tslen) {
+    if (out && outlen) out[0] = '\0';
+    if (ts && tslen) ts[0] = '\0';
+    FILE *f = fopen(ts_modefile_path(), "r");
+    if (!f) return 0;
+    char line[128];
+    int found = 0;
+    while (fgets(line, sizeof(line), f)) {
+        size_t l = strlen(line);
+        while (l && (line[l-1] == '\n' || line[l-1] == '\r')) line[--l] = '\0';
+        if (out && outlen && strncmp(line, "mode=", 5) == 0) {
+            snprintf(out, outlen, "%s", line + 5);
+            found = 1;
+        } else if (ts && tslen && strncmp(line, "ts=", 3) == 0) {
+            snprintf(ts, tslen, "%s", line + 3);
+        }
+    }
+    fclose(f);
+    return found ? 1 : 0;
 }
 
 /* ── Command execution (no shell), CHRONYC_OVERRIDE for tests ─────── */
@@ -413,7 +472,20 @@ int timesync_status_json(char *out, size_t outlen, char *err, size_t errlen) {
                   age >= 0 ? "true" : "false", age);
     if (age >= 0)
         emit_kv_file(p2, out, outlen, &pos);
-    pos = jappend(out, outlen, pos, "}}");
+    pos = jappend(out, outlen, pos, "},");
+
+    /* last-set receiver mode (write-only command channel: no live
+     * readback exists, so the UI shows the last applied value) */
+    {
+        char mode[32], setat[64], em[64], et[128];
+        int have = timesync_mode_last(mode, sizeof(mode), setat, sizeof(setat));
+        json_escape(have == 1 ? mode : "", em, sizeof(em));
+        json_escape(have == 1 ? setat : "", et, sizeof(et));
+        pos = jappend(out, outlen, pos,
+                      "\"receiver\":{\"last_mode\":\"%s\",\"set_at\":\"%s\"}",
+                      em, et);
+    }
+    pos = jappend(out, outlen, pos, "}");
 
     if (pos >= outlen) return -1;
     return 0;

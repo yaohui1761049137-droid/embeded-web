@@ -247,6 +247,21 @@ int main(int argc, char **argv) {
     check(table_count("sessions") == 1,
           "migration: session rows preserved");
 
+    /* ── migration retry: a stale v2 leftover must not block it ───── */
+    auth_cleanup();
+    remove(db_path);
+    check(create_v1_db(db_path) == 0, "seed v1 schema DB (stale v2 leftover)");
+    {
+        sqlite3 *sdb;
+        sqlite3_open(db_path, &sdb);
+        sqlite3_exec(sdb, "CREATE TABLE sessions_v2 (stale TEXT);",
+                     NULL, NULL, NULL);
+        sqlite3_close(sdb);
+    }
+    check(auth_init(db_path) == 0, "auth_init retries with stale sessions_v2");
+    check(strcmp(fk_action("sessions"), "CASCADE") == 0,
+          "migration self-heals past a stale sessions_v2 table");
+
     auth_cleanup();
     remove(db_path);
 

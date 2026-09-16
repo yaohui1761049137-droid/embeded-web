@@ -171,8 +171,14 @@ static void migrate_delete_fks(sqlite3 *db) {
     }
 
     if (audit_needs) {
-        sqlite3_exec(db, "BEGIN;", NULL, NULL, NULL);
+        /* A previously aborted run may have left a half-built v2 table;
+         * drop it first so a retry always succeeds (a stale leftover
+         * otherwise made every future attempt fail silently on
+         * "table audit_log_v2 already exists"). */
+        char *emsg = NULL;
         sqlite3_exec(db,
+            "BEGIN;"
+            "DROP TABLE IF EXISTS audit_log_v2;"
             "CREATE TABLE audit_log_v2 ("
             "  id            INTEGER PRIMARY KEY AUTOINCREMENT,"
             "  operator_id   INTEGER,"
@@ -187,14 +193,20 @@ static void migrate_delete_fks(sqlite3 *db) {
             "INSERT INTO audit_log_v2 SELECT id, operator_id, action, "
             "target_user_id, detail, client_ip, created_at FROM audit_log;"
             "DROP TABLE audit_log;"
-            "ALTER TABLE audit_log_v2 RENAME TO audit_log;",
-            NULL, NULL, NULL);
-        sqlite3_exec(db, "COMMIT;", NULL, NULL, NULL);
+            "ALTER TABLE audit_log_v2 RENAME TO audit_log;"
+            "COMMIT;", NULL, NULL, &emsg);
+        if (emsg) {
+            fprintf(stderr, "auth: audit_log migration failed: %s\n", emsg);
+            sqlite3_free(emsg);
+            sqlite3_exec(db, "ROLLBACK;", NULL, NULL, NULL);
+        }
     }
 
     if (sess_needs) {
-        sqlite3_exec(db, "BEGIN;", NULL, NULL, NULL);
+        char *emsg = NULL;
         sqlite3_exec(db,
+            "BEGIN;"
+            "DROP TABLE IF EXISTS sessions_v2;"
             "CREATE TABLE sessions_v2 ("
             "  sid           TEXT    PRIMARY KEY,"
             "  user_id       INTEGER NOT NULL,"
@@ -207,9 +219,13 @@ static void migrate_delete_fks(sqlite3 *db) {
             "INSERT INTO sessions_v2 SELECT sid, user_id, csrf_token, "
             "created_at, expires_at, client_ip FROM sessions;"
             "DROP TABLE sessions;"
-            "ALTER TABLE sessions_v2 RENAME TO sessions;",
-            NULL, NULL, NULL);
-        sqlite3_exec(db, "COMMIT;", NULL, NULL, NULL);
+            "ALTER TABLE sessions_v2 RENAME TO sessions;"
+            "COMMIT;", NULL, NULL, &emsg);
+        if (emsg) {
+            fprintf(stderr, "auth: sessions migration failed: %s\n", emsg);
+            sqlite3_free(emsg);
+            sqlite3_exec(db, "ROLLBACK;", NULL, NULL, NULL);
+        }
     }
 }
 

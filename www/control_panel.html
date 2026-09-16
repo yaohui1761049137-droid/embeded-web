@@ -180,8 +180,65 @@ if (!document.cookie.match(/csrf_token=/)) {
 </div>
 
 <div id="tab-monitor" class="tab-content">
+<style>
+/* monitor tab only: canvases fill the panel width (JS handles HiDPI) */
+#tab-monitor canvas { width: 100%; height: auto; display: block; }
+#tab-monitor .chart-meta { font-size: 0.78rem; color: #8a8a9a; margin: 0.45rem 1rem 0.2rem; }
+</style>
 <h2>服务监控及报警</h2>
-<p class="placeholder-text">开发中...</p>
+
+<!-- NTP 访问控制（黑白名单） -->
+<div class="config-panel">
+<div class="panel-header">NTP 访问控制（黑白名单）</div>
+<div class="panel-body" style="padding:0">
+<table class="user-table" id="acl-table">
+<thead>
+<tr><th style="width:110px">动作</th><th>网段 / 地址</th><th style="width:110px">操作</th></tr>
+</thead>
+<tbody id="acl-body">
+<tr><td colspan="3" class="placeholder-text" style="padding:1.5rem">加载中...</td></tr>
+</tbody>
+</table>
+</div>
+<div class="panel-body" id="acl-editor" style="display:none; border-top:1px solid #f0f0f3">
+<table class="config-table">
+<tr>
+<td class="config-label">新增规则</td>
+<td class="config-value">
+<select id="acl-action" style="padding:0.45rem 0.6rem; border:1.5px solid #e0e0e8; border-radius:6px; font-family:inherit">
+<option value="allow">allow（放行）</option>
+<option value="deny">deny（拒绝）</option>
+</select>
+<input type="text" id="acl-cidr" class="input-full" style="width:220px; margin-left:0.5rem"
+       placeholder="192.168.8.0/24 或 10.0.0.5" maxlength="63" autocomplete="off">
+<button class="btn-set" style="padding:0.5rem 1.4rem; margin-left:0.6rem" onclick="aclAdd()">添加</button>
+</td>
+</tr>
+</table>
+<p class="tab-status">新增规则即时生效（chronyc 运行时 ACL，无需重启）；删除规则会重启 chrony 重载（约 1 分钟重新锁定 PPS，计数归零）。</p>
+</div>
+<span id="acl-status" class="status-msg" style="margin-left:1rem"></span>
+<p class="tab-status" id="acl-meta"></p>
+</div>
+
+<!-- 请求量趋势 -->
+<div class="config-panel">
+<div class="panel-header">chrony 请求量趋势（近 24 小时）</div>
+<div class="panel-body">
+<canvas id="chart-req" width="920" height="260"></canvas>
+<div class="chart-meta" id="chart-req-meta">加载中...</div>
+</div>
+</div>
+
+<!-- 各网口请求量 -->
+<div class="config-panel">
+<div class="panel-header">各网口 NTP 请求量</div>
+<div class="panel-body">
+<canvas id="chart-eth" width="920" height="240"></canvas>
+<div class="chart-meta" id="chart-eth-meta"></div>
+</div>
+</div>
+
 </div>
 
 <div id="tab-timesync" class="tab-content">
@@ -238,7 +295,8 @@ if (!document.cookie.match(/csrf_token=/)) {
 </td>
 </tr>
 </table>
-<p class="tab-status">切换后接收机重新捕获卫星，PPS/TOD 同步可能短暂中断（数十秒），看门狗会自动恢复；选择结果已保存（掉电保持）。</p>
+<p class="tab-status" id="rx-mode-current">当前模式：读取中...</p>
+<p class="tab-status">切换后接收机重新捕获卫星，PPS/TOD 同步可能短暂中断（数十秒），看门狗会自动恢复；选择结果已保存（掉电保持）。显示值为最近一次通过本界面设置的模式（命令通道为单向，无法在线回读接收机实时状态）。</p>
 <div class="panel-actions">
 <button class="btn-set" onclick="applyReceiverMode()">应用模式</button>
 </div>
@@ -914,6 +972,32 @@ function renderTimesync(r) {
         tsSet('ts-wd', '不可用');
     }
     tsSet('ts-updated', r.ts);
+    syncRxMode(r.receiver);
+}
+
+/* Receiver mode display.  The command channel is write-only (pps_tod
+   owns the serial RX), so this shows the last mode set through this
+   page.  Radios sync only on first load — later polls must not clobber
+   a selection the user is about to apply. */
+var rxModeSynced = false;
+
+function syncRxMode(rx) {
+    var el = document.getElementById('rx-mode-current');
+    if (rx && rx.last_mode && TS_MODE_LABELS[rx.last_mode]) {
+        if (el) {
+            el.textContent = '当前模式：' + TS_MODE_LABELS[rx.last_mode] +
+                             (rx.set_at ? '（' + rx.set_at + ' 设置）' : '');
+        }
+        if (!rxModeSynced) {
+            var radios = document.querySelectorAll('input[name="rx-mode"]');
+            for (var i = 0; i < radios.length; i++) {
+                radios[i].checked = (radios[i].value === rx.last_mode);
+            }
+            rxModeSynced = true;
+        }
+    } else if (el) {
+        el.textContent = '当前模式：未知（出厂默认为 GNSS 全系统）';
+    }
 }
 
 var TS_MODE_LABELS = { gnss: 'GNSS 全系统', gps: 'GPS', bds: '北斗', gal: 'Galileo', glo: 'GLONASS' };
@@ -952,11 +1036,275 @@ function applyReceiverMode() {
     xhr.send(params);
 }
 
+// ================================================================
+//   NTP Monitor — ACL + traffic charts (Tab: 服务监控及报警)
+//   ================================================================
+
+function monSetStatus(msg, type) {
+    var el = document.getElementById('acl-status');
+    if (!el) return;
+    el.textContent = msg;
+    el.className = 'status-msg status-' + type;
+}
+
+function escHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function loadNtpMon() {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/cgi-bin/ntpmon.cgi?action=stats', true);
+    xhr.onload = function() {
+        if (xhr.status != 200) { monSetStatus('查询失败 (HTTP ' + xhr.status + ')', 'error'); return; }
+        try {
+            var r = JSON.parse(xhr.responseText);
+            if (r.status != 'ok') { monSetStatus('错误: ' + (r.message || ''), 'error'); return; }
+            renderAclPanel(r.acl);
+            renderReqChart(r.series, r.meta);
+            renderEthChart(r.eth);
+        } catch(e) { monSetStatus('解析失败', 'error'); }
+    };
+    xhr.onerror = function() { monSetStatus('网络错误', 'error'); };
+    xhr.send();
+}
+
+/* ── ACL panel ─────────────────────────────────────────────────── */
+
+function renderAclPanel(acl) {
+    var isRoot = window._currentUser && window._currentUser.role === 'root';
+    var body = document.getElementById('acl-body');
+    var rows = '';
+    if (acl.ok && acl.rules && acl.rules.length) {
+        for (var i = 0; i < acl.rules.length; i++) {
+            var r = acl.rules[i];
+            var act = r.action === 'allow'
+                ? '<span style="color:#4a8a5a;font-weight:600">allow</span>'
+                : '<span style="color:#c45050;font-weight:600">deny</span>';
+            var op = isRoot
+                ? '<button class="btn-set" style="padding:0.25rem 0.9rem" onclick="aclRemove(\'' + r.cidr + '\')">删除</button>'
+                : '—';
+            rows += '<tr><td>' + act + '</td><td>' + escHtml(r.cidr) + '</td><td>' + op + '</td></tr>';
+        }
+    } else {
+        rows = '<tr><td colspan="3" class="placeholder-text" style="padding:1.5rem">暂无规则（chrony 默认拒绝所有 NTP 客户端）</td></tr>';
+    }
+    body.innerHTML = rows;
+    document.getElementById('acl-editor').style.display = isRoot ? '' : 'none';
+    document.getElementById('acl-meta').textContent =
+        '仅显示由本系统管理的规则（' + (acl.file_mtime ? '文件最后修改 ' + acl.file_mtime : '规则文件读取失败') + '）。';
+}
+
+function aclAdd() {
+    var action = document.getElementById('acl-action').value;
+    var cidr = document.getElementById('acl-cidr').value.trim();
+    if (!cidr) { monSetStatus('请输入网段或地址', 'error'); return; }
+    aclOp('add', action, cidr, '已添加 ' + action + ' ' + cidr + '（即时生效）');
+}
+
+function aclRemove(cidr) {
+    if (!confirm('确认删除规则 ' + cidr + ' ？\n\n删除将重启 chrony 以重载配置：约 1 分钟内重新锁定 PPS，请求计数归零。')) return;
+    aclOp('remove', '', cidr, '已删除 ' + cidr);
+}
+
+function aclOp(op, action, cidr, okMsg) {
+    monSetStatus('提交中...', 'info');
+    var params = 'op=' + encodeURIComponent(op) +
+                 '&action=' + encodeURIComponent(action) +
+                 '&cidr=' + encodeURIComponent(cidr) +
+                 '&csrf_token=' + encodeURIComponent(getCSRF());
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/cgi-bin/ntpmon.cgi?action=acl_op', true);
+    xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+    xhr.onload = function() {
+        if (xhr.status == 200) {
+            try {
+                var r = JSON.parse(xhr.responseText);
+                if (r.status == 'ok') {
+                    monSetStatus(okMsg, 'success');
+                    document.getElementById('acl-cidr').value = '';
+                    loadNtpMon();
+                } else {
+                    monSetStatus('错误: ' + r.message, 'error');
+                }
+            } catch(e) { monSetStatus('解析失败', 'error'); }
+        } else if (xhr.status == 403) { monSetStatus('无权限（仅 root 可修改）', 'error'); }
+        else { monSetStatus('请求失败 (HTTP ' + xhr.status + ')', 'error'); }
+    };
+    xhr.onerror = function() { monSetStatus('网络错误', 'error'); };
+    xhr.send(params);
+}
+
+/* ── chart helpers (hand-rolled canvas, HiDPI aware) ───────────── */
+
+function setupCanvas(id) {
+    var cv = document.getElementById(id);
+    if (!cv) return null;
+    var dpr = window.devicePixelRatio || 1;
+    var w = cv.clientWidth || 920;
+    var h = parseInt(cv.getAttribute('height'), 10) || 240;
+    cv.width = Math.round(w * dpr);
+    cv.height = Math.round(h * dpr);
+    var ctx = cv.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, w, h);
+    return { ctx: ctx, w: w, h: h };
+}
+
+function niceMax(v) {
+    if (v <= 5) return 5;
+    var p = Math.pow(10, Math.floor(Math.log(v) / Math.LN10));
+    var m = v / p;
+    var f = m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10;
+    return f * p;
+}
+
+function fmtHHMM(t) {
+    var d = new Date(t * 1000);
+    return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+}
+
+/* ── chart 1: request trend (per-minute line + cumulative line) ─ */
+
+function renderReqChart(s, meta) {
+    var c = setupCanvas('chart-req');
+    if (!c) return;
+    var ctx = c.ctx, W = c.w, H = c.h;
+    var L = 52, R = 60, T = 16, B = 26;
+    var pw = W - L - R, ph = H - T - B;
+    var t = (s && s.t) || [], m = (s && s.m) || [], cum = (s && s.c) || [];
+    var metaEl = document.getElementById('chart-req-meta');
+    if (!t.length) {
+        ctx.fillStyle = '#9a9aab'; ctx.font = '13px sans-serif'; ctx.textAlign = 'left';
+        ctx.fillText('暂无采样数据（板上采样器每分钟写入一次）', L, H / 2);
+        if (metaEl) metaEl.textContent = '';
+        return;
+    }
+    var t1 = t[t.length - 1], t0 = t1 - 24 * 3600;
+    if (t[0] > t0) t0 = t[0];
+    var mMax = 1, i;
+    for (i = 0; i < m.length; i++) if (m[i] > mMax) mMax = m[i];
+    mMax = niceMax(mMax);
+    var cMax = 1;
+    for (i = 0; i < cum.length; i++) if (cum[i] > cMax) cMax = cum[i];
+    function X(tv) { return L + (tv - t0) / Math.max(1, t1 - t0) * pw; }
+    function Y1(v) { return T + ph - v / mMax * ph; }
+    function Y2(v) { return T + ph - v / cMax * ph; }
+
+    ctx.strokeStyle = '#ececf2'; ctx.lineWidth = 1;
+    ctx.fillStyle = '#9a9aab'; ctx.font = '11px sans-serif'; ctx.textAlign = 'right';
+    for (var g = 0; g <= 4; g++) {
+        var y = T + ph - g * ph / 4;
+        ctx.beginPath(); ctx.moveTo(L, y); ctx.lineTo(L + pw, y); ctx.stroke();
+        ctx.fillText(String(Math.round(mMax * g / 4)), L - 6, y + 3);
+    }
+    ctx.fillStyle = '#c9c9d6'; ctx.textAlign = 'left';
+    for (var g2 = 0; g2 <= 2; g2++) {
+        var y2 = T + ph - g2 * ph / 2;
+        ctx.fillText(String(Math.round(cMax * g2 / 2)), L + pw + 6, y2 + 3);
+    }
+    ctx.fillStyle = '#9a9aab'; ctx.textAlign = 'center';
+    for (var k = 0; k <= 5; k++) {
+        var tv = t0 + (t1 - t0) * k / 5;
+        ctx.fillText(fmtHHMM(tv), X(tv), H - 8);
+    }
+
+    /* cumulative (light, right axis) */
+    ctx.strokeStyle = 'rgba(120,110,160,0.35)'; ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    var started = false;
+    for (i = 0; i < cum.length; i++) {
+        if (t[i] < t0) continue;
+        if (i > 0 && cum[i] < cum[i - 1]) started = false;   /* counter reset → break */
+        var x = X(t[i]), y = Y2(cum[i]);
+        if (!started) { ctx.moveTo(x, y); started = true; } else { ctx.lineTo(x, y); }
+    }
+    ctx.stroke();
+
+    /* per-minute requests (main, left axis) */
+    ctx.strokeStyle = '#6b5b95'; ctx.lineWidth = 2;
+    ctx.beginPath();
+    started = false;
+    var lastPt = null;
+    for (i = 0; i < m.length; i++) {
+        if (t[i] < t0 || m[i] < 0) { started = false; continue; }
+        var px = X(t[i]), py = Y1(m[i]);
+        if (!started) { ctx.moveTo(px, py); started = true; } else { ctx.lineTo(px, py); }
+        lastPt = [px, py];
+    }
+    ctx.stroke();
+    if (lastPt) {
+        ctx.fillStyle = '#6b5b95';
+        ctx.beginPath(); ctx.arc(lastPt[0], lastPt[1], 3, 0, 6.2832); ctx.fill();
+    }
+
+    /* legend */
+    ctx.textAlign = 'left'; ctx.font = '11px sans-serif';
+    ctx.fillStyle = '#6b5b95'; ctx.fillRect(L + 8, T + 2, 14, 3);
+    ctx.fillStyle = '#6b6a80'; ctx.fillText('每分钟请求数（左轴）', L + 27, T + 7);
+    ctx.fillStyle = 'rgba(120,110,160,0.5)'; ctx.fillRect(L + 148, T + 2, 14, 3);
+    ctx.fillStyle = '#6b6a80'; ctx.fillText('累计请求数（右轴）', L + 167, T + 7);
+
+    if (metaEl) {
+        var age = meta.csv_age_s;
+        metaEl.textContent = '采样点 ' + (meta.samples || 0) +
+            (age >= 0 ? '，最新 ' + age + ' 秒前' : '') +
+            (age > 180 ? '  ⚠ 采样器可能未运行' : '');
+    }
+}
+
+/* ── chart 2: per-interface request bars ───────────────────────── */
+
+function renderEthChart(eth) {
+    var c = setupCanvas('chart-eth');
+    if (!c) return;
+    var ctx = c.ctx, W = c.w, H = c.h;
+    var L = 52, R = 18, T = 20, B = 36;
+    var pw = W - L - R, ph = H - T - B;
+    var names = (eth && eth.names) || [], total = (eth && eth.total) || [],
+        hour = (eth && eth.last_hour) || [];
+    var vmax = 1, i;
+    for (i = 0; i < total.length; i++) if (total[i] > vmax) vmax = total[i];
+    vmax = niceMax(vmax);
+
+    ctx.strokeStyle = '#ececf2'; ctx.fillStyle = '#9a9aab'; ctx.font = '11px sans-serif';
+    for (var g = 0; g <= 4; g++) {
+        var y = T + ph - g * ph / 4;
+        ctx.beginPath(); ctx.moveTo(L, y); ctx.lineTo(L + pw, y); ctx.stroke();
+        ctx.textAlign = 'right';
+        ctx.fillText(String(Math.round(vmax * g / 4)), L - 6, y + 3);
+    }
+    var bw = Math.min(96, pw / (names.length * 1.8));
+    for (i = 0; i < names.length; i++) {
+        var cx = L + pw * (i + 0.5) / names.length;
+        var v = total[i] || 0;
+        var bh = v / vmax * ph;
+        var x = cx - bw / 2, y = T + ph - bh;
+        var grad = ctx.createLinearGradient(0, y, 0, T + ph);
+        grad.addColorStop(0, '#8d7bb5'); grad.addColorStop(1, '#c3b7cf');
+        ctx.fillStyle = grad;
+        ctx.fillRect(x, y, bw, Math.max(bh, 1));
+        ctx.fillStyle = '#5a5a6e'; ctx.textAlign = 'center'; ctx.font = '12px sans-serif';
+        ctx.fillText(String(v), cx, y - 6);
+        ctx.fillStyle = '#7a7a8e';
+        ctx.fillText(names[i], cx, T + ph + 16);
+        ctx.fillStyle = '#9a9aab'; ctx.font = '11px sans-serif';
+        ctx.fillText('近1h +' + (hour[i] || 0), cx, T + ph + 30);
+    }
+    ctx.strokeStyle = '#d8d8e0';
+    ctx.beginPath(); ctx.moveTo(L, T + ph); ctx.lineTo(L + pw, T + ph); ctx.stroke();
+
+    var metaEl = document.getElementById('chart-eth-meta');
+    if (metaEl) metaEl.textContent = '累计值为 iptables 计数（规则生效以来，含被拒绝的请求）；设备重启后清零。';
+}
+
 // Initialize
 setupOctetHandlers();
 buildNICTabs();
 loadTimesyncStatus();
 setInterval(loadTimesyncStatus, 3000);
+loadNtpMon();
+setInterval(loadNtpMon, 60000);
 </script>
 
 </body>

@@ -44,20 +44,24 @@ def parse_js_nics(html_text):
     return JS_NIC_RE.findall(m.group(1))
 
 
-# Time-sync tab contract: the front-end polls timesync.cgi?action=status
-# and posts action=setmode; the CGI must handle exactly those actions.
-# Same two-sided-registry idea as the NIC check.
-TS_ACTIONS = ("status", "setmode")
+# CGI action contracts: every ?action= URL the front-end calls must have
+# a matching handler in its CGI.  Same two-sided-registry idea as the NIC
+# check, applied to the timesync and ntpmon interfaces.
+CGI_ACTIONS = (
+    ("timesync.cgi", "src/timesync.cgi.c", ("status", "setmode")),
+    ("ntpmon.cgi",   "src/ntpmon.cgi.c",   ("stats", "acl_op")),
+)
 
 
-def check_timesync(root, errors):
+def check_cgi_contracts(root, errors):
     html = (root / "www" / "control_panel.html").read_text()
-    cgi = (root / "src" / "timesync.cgi.c").read_text()
-    for action in TS_ACTIONS:
-        if "/cgi-bin/timesync.cgi?action=%s" % action not in html:
-            errors.append("front-end missing timesync.cgi?action=%s" % action)
-        if 'strcmp(action, "%s") == 0' % action not in cgi:
-            errors.append("timesync.cgi missing handler for action=%s" % action)
+    for name, path, actions in CGI_ACTIONS:
+        cgi = (root / path).read_text()
+        for action in actions:
+            if "/cgi-bin/%s?action=%s" % (name, action) not in html:
+                errors.append("front-end missing %s?action=%s" % (name, action))
+            if 'strcmp(action, "%s") == 0' % action not in cgi:
+                errors.append("%s missing handler for action=%s" % (path, action))
 
 
 def check(repo):
@@ -66,7 +70,7 @@ def check(repo):
     js_nics = parse_js_nics((root / "www" / "control_panel.html").read_text())
 
     errors = []
-    check_timesync(root, errors)
+    check_cgi_contracts(root, errors)
     if c_nics != js_nics:
         errors.append("NIC lists drifted: C=%s JS=%s" % (c_nics, js_nics))
     if not js_nics:

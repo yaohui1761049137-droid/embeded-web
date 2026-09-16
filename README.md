@@ -21,9 +21,13 @@
 - **用户管理 API**（root 可创建/启用/禁用/删除 admin 用户，含审计日志）
 - **时间同步监控**（PPS+TOD+chrony 实时状态：授时源/系统偏差/RMS/频偏/看门狗，3 秒轮询）
 - **接收机模式切换**（UT986 五种模式，CSRF + 枚举白名单后写 ttyS7 固定载荷，掉电保持）
-- **业务审计日志**（网络配置修改、接收机模式切换自动记录操作者和时间到 `audit_log` 表）
+- **NTP 访问控制**（chrony allow/deny 黑白名单表格，root 专属；新增走 chronyc 运行时 ACL
+  即时生效、删除重启重载；CIDR 双重校验 + CSRF，操作入审计）
+- **NTP 流量监控**（近 24h 请求量趋势 + 四网口请求量柱状图；chronyc serverstats 与 iptables
+  每网口计数每分钟采样落盘，手写 Canvas 渲染）
+- **业务审计日志**（网络配置修改、接收机模式切换、NTP 黑白名单变更自动记录操作者和时间到 `audit_log` 表）
 - **SQLite 存储**（WAL 模式，多进程 CGI 并发安全）
-- **94 项自动化测试**（`test_gate.sh`，宿主机离线全绿，含 NMCLI_OVERRIDE / CHRONYC_OVERRIDE 假命令）
+- **120 项自动化测试**（`test_gate.sh`，宿主机离线全绿，含 NMCLI_OVERRIDE / CHRONYC_OVERRIDE / NTPMON_HELPER_OVERRIDE 假命令）
 
 ## 架构
 
@@ -48,10 +52,12 @@
 │  + users.c (用户管理/自改密) │
 │  + nmcli.c (本地网卡配置库)  │  ← fork/execvp，无 shell，参数白名单校验
 │  + timesync.c (时间同步/串口)│  ← chronyc 读取 + 固定载荷写 ttyS7
+│  + ntpmon.c (NTP 监控/ACL)  │  ← 采样 CSV 解析 + chrony ACL helper 调用
 │  + common.c (HTTP/POST)      │
 │                              │
 │  network.cgi ?port=eth0 ─────│  ← nmcli 读写 + 回滚编排 + 审计
 │  timesync.cgi ?action=... ───│  ← chrony/pps_tod 状态 + UT986 模式切换
+│  ntpmon.cgi ?action=... ─────│  ← NTP 黑白名单 + 请求量图表数据
 │                              │
 │  audit_log (业务操作)        │
 └──────────────┬───────────────┘
@@ -65,8 +71,11 @@
                    ┌───────────────────────────────┐
                    │  chrony / pps_tod (系统服务)   │
                    │  chronyc 本地查询（无特权）     │
+                   │  ACL: acl-web.conf ← helper    │
                    │  /run/pps_tod 状态文件（0644）  │
                    │  /dev/ttyS7 ← www-data dialout │
+                   │  ntp-stats.timer → 每分钟采样  │
+                   │  iptables 每网口 udp/123 计数  │
                    └───────────────────────────────┘
 ```
 
@@ -88,11 +97,15 @@ embeded_Lighttpd/
 │   ├── gate.h / gate.c        CGI 请求门卫（session → role → CSRF 阶梯 + 强制改密，统一错误输出）
 │   ├── users.h / users.c      用户管理模块（业务不变量 + SQL + 审计，位于 gate 之上）
 │   ├── nmcli.h / nmcli.c      本地网卡配置库（fork/execvp 调用 nmcli + 参数校验 + 掩码⇄前缀）
+│   ├── timesync.h / timesync.c 时间同步库（chronyc 执行/解析、状态文件读取、UT986 模式切换）
+│   ├── ntpmon.h / ntpmon.c    NTP 监控库（ACL 规则读写与校验、采样 CSV 解析、ACL helper 调用）
 │   ├── common.h / common.c    CGI 公共库（HTTP/POST 解析）
 │   ├── login.cgi.c            登录（DB 验证 + 双 Cookie + 回滚确认标记）
 │   ├── logout.cgi.c           登出（销毁 Session）
 │   ├── main.cgi.c             控制面板入口（Session 校验）
 │   ├── network.cgi.c          网络配置（nmcli 读写 + 回滚编排 + 审计）
+│   ├── timesync.cgi.c         时间同步（PPS/TOD 状态 + 接收机模式，见 Tab「时间服务校验设置」）
+│   ├── ntpmon.cgi.c           NTP 监控（黑白名单 + 流量图表，见 Tab「服务监控及报警」）
 │   ├── db_init.c              数据库初始化（创建 root 用户）
 │   ├── user_list.cgi.c        [root] 用户列表
 │   ├── user_create.cgi.c      [root] 创建用户
@@ -102,17 +115,23 @@ embeded_Lighttpd/
 │   └── user_change_pass.cgi.c 用户自改密（当前密码验证 + 策略 + 踢会话）
 ├── www/
 │   ├── index.html             登录页面
-│   ├── control_panel.html     控制面板（7 Tab，网口标签页由 NICS 注册表驱动）
+│   ├── control_panel.html     控制面板（7 Tab；网口由 NICS 注册表驱动，时间同步/NTP 监控见对应 Tab）
 │   ├── change.html            修改密码页面（自改密入口）
 │   └── style.css              全局样式
 ├── docs/adr/                  ADR 决策记录（0002 = 密码策略，0003 = 本地网络配置）
+├── docs/ntp-monitor.md        NTP 监控设计说明（数据源、ACL 语义与重启策略）
 ├── rollback_watchdog.sh       eth0 回滚看门狗（systemd-run 触发 + 开机恢复双入口）
 ├── rollback-recover.service   开机回滚恢复 oneshot 服务
+├── chrony_acl_apply.sh        NTP 黑白名单应用助手（root，经 sudoers 白名单调用）
+├── ntp_stats_sample.sh        NTP 统计采样器（每分钟，iptables + chronyc → CSV）
+├── ntp-stats.service/.timer   采样器 systemd 定时单元
 ├── fake_nmcli.sh              宿主机离线测试用假 nmcli（NMCLI_OVERRIDE）
+├── fake_chronyc.sh            宿主机离线测试用假 chronyc（CHRONYC_OVERRIDE）
+├── fake_ntp_acl_helper.sh     宿主机离线测试用假 ACL helper（NTPMON_HELPER_OVERRIDE）
 ├── test_suite.sh              板端端到端测试（真实 nmcli）
-├── test_gate.sh               宿主机门卫单测（CGI 级，无需板子，72 项）
+├── test_gate.sh               宿主机门卫单测（CGI 级，无需板子，120 项）
 ├── test_users.c               宿主机用户模块单测（API 级，无需板子）
-└── test_frontend.py           前端 NICS 注册表 ↔ nmcli.c 网口枚举一致性测试（离线）
+└── test_frontend.py           前端 NICS 注册表 ↔ nmcli.c 网口枚举 + CGI action 契约一致性测试（离线）
 ```
 
 ## 快速开始
@@ -173,9 +192,9 @@ ssh root@<board> '
   for src in login.cgi.c logout.cgi.c main.cgi.c network.cgi.c \
              user_list.cgi.c user_create.cgi.c user_passwd.cgi.c \
              user_toggle.cgi.c user_delete.cgi.c user_change_pass.cgi.c \
-             timesync.cgi.c; do
+             timesync.cgi.c ntpmon.cgi.c; do
     name=$(echo $src | sed "s/\.cgi\.c//" | sed "s/\.c//").cgi
-    gcc -Wall -O2 -o $name $src common.c auth.c gate.c users.c nmcli.c timesync.c sha256.c sqlite3.o -lpthread -ldl
+    gcc -Wall -O2 -o $name $src common.c auth.c gate.c users.c nmcli.c timesync.c ntpmon.c sha256.c sqlite3.o -lpthread -ldl
   done
 
   # 初始化数据库
@@ -202,6 +221,28 @@ EOF
   # 3b. www-data 加入 dialout 组（timesync.cgi 写 /dev/ttyS7 控制 UT986 接收机）
   usermod -aG dialout www-data
   systemctl restart lighttpd   # 组变更对新 CGI 进程生效
+
+  # 3c. NTP 监控（黑白名单 + 流量图表）
+  #     助手脚本 + 采样器 + 采样定时器
+  cp chrony_acl_apply.sh ntp_stats_sample.sh /usr/local/bin/
+  chmod 755 /usr/local/bin/chrony_acl_apply.sh /usr/local/bin/ntp_stats_sample.sh
+  cp ntp-stats.service ntp-stats.timer /etc/systemd/system/
+  systemctl enable --now ntp-stats.timer
+  #     chrony ACL 托管文件 + include（一次性；随后重启 chrony 激活）
+  #     现有生效的 allow/deny 行迁入 acl-web.conf（行为不变）
+  printf "# Web-managed NTP access rules (chrony allow/deny) - do not edit by hand.\nallow 192.168.137.0/24\n" > /etc/chrony/acl-web.conf
+  chmod 644 /etc/chrony/acl-web.conf
+  grep -q "include /etc/chrony/acl-web.conf" /etc/chrony/chrony.conf || {
+      sed -i '/^allow /d; /^deny /d' /etc/chrony/chrony.conf
+      echo "include /etc/chrony/acl-web.conf" >> /etc/chrony/chrony.conf
+  }
+  systemctl restart chrony
+  #     www-data sudoers 白名单（ACL helper 入口）
+  cat > /etc/sudoers.d/99-www-ntpacl <<EOF
+www-data ALL=(root) NOPASSWD: /usr/local/bin/chrony_acl_apply.sh add allow *, /usr/local/bin/chrony_acl_apply.sh add deny *, /usr/local/bin/chrony_acl_apply.sh remove *
+EOF
+  chmod 440 /etc/sudoers.d/99-www-ntpacl
+  visudo -cf /etc/sudoers.d/99-www-ntpacl
 
   # 4. 回滚看门狗 + 开机恢复服务
   cp rollback_watchdog.sh /usr/local/bin/
@@ -245,20 +286,25 @@ EOF
 ./test_gate.sh
 ```
 
-`test_gate.sh` 内置四层，共 92 项：
+`test_gate.sh` 内置四层，共 120 项：
 - CGI 级门卫测试（gate 阶梯 + 登录/登出 + 用户 CRUD 冒烟）
 - API 级用户模块测试（`test_users.c` 直接断言 users 模块的不变量：自删/删 root/禁最后
   root 拒绝、审计行 target_user_id 正确）
 - 网络配置测试（Test 7-7f）：`NMCLI_OVERRIDE` 指向 `fake_nmcli.sh` 离线跑 network.cgi——
   eth0 读回、SET + 回滚文件断言（`ROLLBACK_FILE`）、非法网口拒绝、eth1 自动建 profile、
   网关自动迁移；`NMCLI_NO_SUDO=1` 跳过 sudo 前缀
-- 时间同步测试（Test 27-27f）：`CHRONYC_OVERRIDE` 指向 `fake_chronyc.sh` + `TIMESYNC_DEV`/
-  `TIMESYNC_STATUS_DIR` 指向临时文件，离线跑 timesync.cgi——status 解析（chrony CSV 含
-  hex 解码、pps_tod/看门狗状态文件）、状态文件缺失降级、setmode 无 CSRF/非法模式拒绝、
-  写入串口的 $CFGGNSS/$CFGSAVE 载荷与校验和逐字节断言
+- 时间同步测试（Test 27-27g）：`CHRONYC_OVERRIDE` 指向 `fake_chronyc.sh` + `TIMESYNC_DEV`/
+  `TIMESYNC_STATUS_DIR`/`TIMESYNC_MODE_FILE` 指向临时文件，离线跑 timesync.cgi——status
+  解析（chrony CSV 含 hex 解码、pps_tod/看门狗状态文件）、状态文件缺失降级、setmode 无
+  CSRF/非法模式拒绝、写入串口的 $CFGGNSS/$CFGSAVE 载荷与校验和逐字节断言、接收机模式
+  状态文件的持久化与状态回读（last_mode）
+- NTP 监控测试（Test 28-28k）：`NTPMON_ACL_FILE`/`NTPMON_CSV`/`NTPMON_HELPER_OVERRIDE` 指向
+  临时文件 + 假 helper，离线跑 ntpmon.cgi——stats 解析（含计数器归零断点与近 1h 增量）、
+  CSV 缺失降级、admin 只读放行/改 ACL 403、CSRF/非法 CIDR/重复与不存在规则拒绝、
+  helper 参数逐字断言与失败透传
 - 前端注册表一致性：`test_frontend.py` 解析 `control_panel.html` 的 `NICS` 与
-  `nmcli.c` 的 `g_nics`，断言网口列表双向一致；并断言 timesync.cgi 的
-  status/setmode 两个 action 在前端 URL 与 C 端处理器同步存在（渲染本身由浏览器截图核对）
+  `nmcli.c` 的 `g_nics`，断言网口列表双向一致；并断言 timesync.cgi / ntpmon.cgi 的各
+  action 在前端 URL 与 C 端处理器同步存在（渲染本身由浏览器截图核对）
 
 板端端到端测试（需 LubanCat 在线，配置真实 nmcli；凭据按环境传入）：
 
@@ -271,7 +317,11 @@ EOF
 > 同理，nmcli 调用读取 `NMCLI_OVERRIDE` 覆盖可执行文件、`NMCLI_NO_SUDO=1` 去掉 sudo，
 > 使网络配置测试可用假命令离线进行。timesync.cgi 读取 `CHRONYC_OVERRIDE`（chronyc 可
 > 执行文件）、`TIMESYNC_DEV`（串口设备，默认 /dev/ttyS7）、`TIMESYNC_STATUS_DIR`
-> （状态文件目录，默认 /run/pps_tod），使时间同步测试同样可离线运行。
+> （状态文件目录，默认 /run/pps_tod）、`TIMESYNC_MODE_FILE`（接收机模式状态文件，默认
+> /var/db/ut986_mode）。ntpmon.cgi 读取 `NTPMON_ACL_FILE`（ACL 托管文件，默认
+> /etc/chrony/acl-web.conf）、`NTPMON_CSV`（采样文件，默认 /var/db/ntp_stats.csv）、
+> `NTPMON_HELPER_OVERRIDE`（ACL helper 可执行文件，板上默认经 sudo 调用
+> /usr/local/bin/chrony_acl_apply.sh）——使各测试均可离线运行。
 
 ## 安全模型
 
@@ -284,6 +334,8 @@ EOF
 | 权限 | root/admin 角色分离，root 保护（不可自删/不可禁最后一个 root） |
 | 系统命令 | nmcli 经 www-data sudoers NOPASSWD 白名单放行；参数先白名单/格式双重校验，fork/execvp 无 shell |
 | 串口控制 | timesync.cgi 仅向 /dev/ttyS7 写固定字节载荷（5 种 UT986 模式 × 固定校验和），枚举白名单 + CSRF；写入经 dialout 组授权，不读串口（避免抢走 pps_tod 的 NMEA） |
+| NTP 访问控制 | ntpmon.cgi 改 ACL 限 root（角色门）+ CSRF；CIDR 在 CGI 与 root 助手内双重校验，助手经 sudoers NOPASSWD 白名单调用（步骤 3c）；新增走 chronyc 运行时 ACL（即时生效），删除重启 chrony 重载；全部入审计 |
+| 流量采样 | iptables 每网口 udp/123 计数规则为"只计数不拦截"（ACCEPT 与当前默认策略一致）；采样器读取 chronyc 与 iptables 计数写 /var/db/ntp_stats.csv（0644） |
 | 审计 | `audit_log` 表记录所有管理操作 |
 | SQL | 参数化查询（SQLite prepared statements） |
 

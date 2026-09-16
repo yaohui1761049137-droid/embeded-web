@@ -64,8 +64,16 @@ static int handle_setmode(const char *mode, const SessionInfo *session) {
     snprintf(detail, sizeof(detail), "接收机模式切换为 %s", label);
     auth_audit_log(session->user_id, "timesync_setmode", session->user_id,
                    detail, getenv("REMOTE_ADDR"));
-    printf("{\"status\":\"ok\",\"mode\":\"%s\","
-           "\"message\":\"命令已发送，生效以状态数据为准\"}", mode);
+
+    /* Persist the last-set mode for the UI (the channel is write-only,
+     * so this file is the only way the page can show it).  Best-effort:
+     * the receiver already got the command either way. */
+    char serr[160];
+    int saved = (timesync_mode_save(m, serr, sizeof(serr)) == 0);
+
+    printf("{\"status\":\"ok\",\"mode\":\"%s\",\"saved\":%s,"
+           "\"message\":\"命令已发送，生效以状态数据为准\"}",
+           mode, saved ? "true" : "false");
     return 0;
 }
 

@@ -39,6 +39,18 @@ const char *timesync_mode_label(TimesyncMode m);
  * -1 with err set. */
 int timesync_set_mode(TimesyncMode m, char *err, size_t errlen);
 
+/* Last-applied mode bookkeeping (shown in the UI).  The command channel
+ * is write-only — the receiver cannot be re-read without stealing NMEA
+ * sentences from pps_tod — so the UI displays what was last set here,
+ * not a live readback.  State file: TIMESYNC_MODE_FILE override,
+ * default /var/db/ut986_mode (key=value: mode, ts). */
+int timesync_mode_save(TimesyncMode m, char *err, size_t errlen);
+
+/* Read the last-set mode back.  Returns 1 if present (mode name into
+ * out, timestamp into ts), 0 if no state file / no mode line, -1 on
+ * error.  out/ts may be NULL. */
+int timesync_mode_last(char *out, size_t outlen, char *ts, size_t tslen);
+
 /* Build the status JSON document into out.  Sections degrade
  * individually (chrony down, state file missing) but the document
  * always has a well-formed shape for the UI.  Returns 0 on success,

@@ -43,11 +43,11 @@ gcc -Wall -O2 -c -DSQLITE_THREADSAFE=0 "$SRC/sqlite3.c" -o "$WORK/sqlite3.o"
 for src in login.cgi.c logout.cgi.c main.cgi.c network.cgi.c \
            user_list.cgi.c user_create.cgi.c user_passwd.cgi.c \
            user_toggle.cgi.c user_delete.cgi.c user_change_pass.cgi.c \
-           timesync.cgi.c; do
+           timesync.cgi.c ntpmon.cgi.c; do
     name=$(echo "$src" | sed 's/\.cgi\.c//').cgi
     gcc -Wall -O2 -o "$BIN/$name" "$SRC/$src" "$SRC/common.c" "$SRC/auth.c" \
         "$SRC/gate.c" "$SRC/users.c" "$SRC/nmcli.c" "$SRC/timesync.c" \
-        "$SRC/sha256.c" \
+        "$SRC/ntpmon.c" "$SRC/sha256.c" \
         "$WORK/sqlite3.o" -lpthread -ldl
 done
 gcc -Wall -O2 -o "$BIN/db_init" "$SRC/db_init.c" "$SRC/auth.c" "$SRC/gate.c" \
@@ -399,6 +399,7 @@ assert_contains "recovered, gate passes again" "无效的网口" "$RESP"
 export CHRONYC_OVERRIDE="$(dirname "$0")/fake_chronyc.sh"
 export TIMESYNC_STATUS_DIR="$WORK/ts_state"
 export TIMESYNC_DEV="$WORK/ts_dev"
+export TIMESYNC_MODE_FILE="$WORK/ut986_mode"
 mkdir -p "$TIMESYNC_STATUS_DIR"
 cat > "$TIMESYNC_STATUS_DIR/status" <<'EOF'
 ts=2026-09-14 11:00:00
@@ -437,6 +438,7 @@ assert_contains "pps_tod good" '"good":"1"' "$RESP"
 assert_contains "pps_tod offset" '"offset_us":"+23"' "$RESP"
 assert_contains "watchdog mode" '"mode":"OK"' "$RESP"
 assert_contains "freshness emitted" '"age_s"' "$RESP"
+assert_contains "no last-set mode yet" '"last_mode":""' "$RESP"
 
 echo "27b. timesync status: missing state files degrade gracefully"
 rm -f "$TIMESYNC_STATUS_DIR/status" "$TIMESYNC_STATUS_DIR/watchdog.state"
@@ -475,6 +477,8 @@ else
     red "  ❌ payload mismatch: $(od -c "$TIMESYNC_DEV" | head -3)"
     FAIL=$((FAIL + 1))
 fi
+MF=$(cat "$TIMESYNC_MODE_FILE" 2>/dev/null)
+assert_contains "mode file saved (bds)" "mode=bds" "$MF"
 
 echo "27f. setmode gnss (factory default) payload"
 BODY="mode=gnss&csrf_token=$CSRF_VAL"
@@ -490,6 +494,122 @@ else
     red "  ❌ payload mismatch: $(od -c "$TIMESYNC_DEV" | head -3)"
     FAIL=$((FAIL + 1))
 fi
+MF=$(cat "$TIMESYNC_MODE_FILE" 2>/dev/null)
+assert_contains "mode file saved (gnss)" "mode=gnss" "$MF"
+
+echo "27g. status reflects last-set receiver mode"
+RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       QUERY_STRING="action=status" "$BIN/timesync.cgi")
+assert_contains "last_mode now gnss" '"last_mode":"gnss"' "$RESP"
+assert_contains "set_at recorded" '"set_at":"20' "$RESP"
+
+# ── Test 28-28k: ntpmon.cgi — NTP ACL + traffic stats (offline) ─────
+# Offline: fake ACL helper (NTPMON_HELPER_OVERRIDE) + scratch acl/csv.
+export NTPMON_ACL_FILE="$WORK/ntpmon_acl.conf"
+export NTPMON_CSV="$WORK/ntpmon_stats.csv"
+export NTPMON_HELPER_OVERRIDE="$(dirname "$0")/fake_ntp_acl_helper.sh"
+export FAKE_ACL_STATE="$WORK/fake_acl"
+mkdir -p "$FAKE_ACL_STATE"
+cat > "$NTPMON_ACL_FILE" <<'EOF'
+# Web-managed NTP access rules (chrony allow/deny) - do not edit by hand.
+allow 192.168.137.0/24
+EOF
+T0=$(( $(date +%s) - 180 ))
+cat > "$NTPMON_CSV" <<EOF
+$T0,10,0,5,0,0,7,0,0,0
+$((T0+60)),22,0,5,0,0,9,0,0,0
+$((T0+120)),1,0,5,0,0,1,0,0,0
+$((T0+180)),13,0,5,0,0,3,5,0,0
+EOF
+
+echo "28. ntpmon stats: acl rules + series (counter reset) + bars"
+RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       QUERY_STRING="action=stats" "$BIN/ntpmon.cgi")
+assert_contains "status ok" '"status":"ok"' "$RESP"
+assert_contains "acl rule listed" '"action":"allow","cidr":"192.168.137.0/24"' "$RESP"
+assert_contains "series t array" '"series":{"t":\[' "$RESP"
+assert_contains "per-minute w/ reset break" '"m":\[-1,12,-1,12\]' "$RESP"
+assert_contains "cumulative raw values" '"c":\[10,22,1,13\]' "$RESP"
+assert_contains "eth totals" '"total":\[3,5,0,0\]' "$RESP"
+assert_contains "eth last hour (reset clamped)" '"last_hour":\[0,5,0,0\]' "$RESP"
+assert_contains "csv flagged ok" '"csv_ok":true' "$RESP"
+
+echo "28b. ntpmon stats: missing CSV degrades gracefully"
+mv "$NTPMON_CSV" "$NTPMON_CSV.hidden"
+RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       QUERY_STRING="action=stats" "$BIN/ntpmon.cgi")
+assert_contains "csv flagged missing" '"csv_ok":false' "$RESP"
+assert_contains "empty series" '"t":\[\]' "$RESP"
+mv "$NTPMON_CSV.hidden" "$NTPMON_CSV"
+
+echo "28c. ntpmon stats: admin session can read"
+BODY="user=testadmin2&pass=Recovered1!"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" REQUEST_METHOD=POST \
+       CONTENT_LENGTH=${#BODY} "$BIN/login.cgi")
+ADM_SID=$(echo "$RESP" | grep -o "session_id=[^;]*" | head -1)
+RESP=$(DB_PATH="$DB" HTTP_COOKIE="$ADM_SID" \
+       QUERY_STRING="action=stats" "$BIN/ntpmon.cgi")
+assert_contains "stats allowed for admin" '"status":"ok"' "$RESP"
+
+echo "28d. acl_op: admin forbidden (root-only)"
+BODY="op=add&action=allow&cidr=10.20.30.0/24&csrf_token=x"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$ADM_SID" \
+       QUERY_STRING="action=acl_op" REQUEST_METHOD=POST \
+       CONTENT_LENGTH=${#BODY} "$BIN/ntpmon.cgi")
+assert_contains "Forbidden" "Forbidden" "$RESP"
+
+echo "28e. acl_op: missing CSRF rejected"
+BODY="op=add&action=allow&cidr=10.20.30.0/24"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       QUERY_STRING="action=acl_op" REQUEST_METHOD=POST \
+       CONTENT_LENGTH=${#BODY} "$BIN/ntpmon.cgi")
+assert_contains "CSRF rejected" "CSRF token invalid" "$RESP"
+
+echo "28f. acl_op: invalid CIDR rejected"
+BODY="op=add&action=allow&cidr=999.1.2.3/33&csrf_token=$CSRF_VAL"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       QUERY_STRING="action=acl_op" REQUEST_METHOD=POST \
+       CONTENT_LENGTH=${#BODY} "$BIN/ntpmon.cgi")
+assert_contains "invalid CIDR" "无效的 CIDR" "$RESP"
+
+echo "28g. acl_op: root add → helper invoked with exact args"
+BODY="op=add&action=allow&cidr=10.20.30.0/24&csrf_token=$CSRF_VAL"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       QUERY_STRING="action=acl_op" REQUEST_METHOD=POST \
+       CONTENT_LENGTH=${#BODY} "$BIN/ntpmon.cgi")
+assert_contains "add ok" '"status":"ok"' "$RESP"
+CALLS=$(cat "$FAKE_ACL_STATE/calls.log")
+assert_contains "helper got add args" "add allow 10.20.30.0/24" "$CALLS"
+
+echo "28h. acl_op: duplicate rule rejected before helper"
+BODY="op=add&action=deny&cidr=192.168.137.0/24&csrf_token=$CSRF_VAL"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       QUERY_STRING="action=acl_op" REQUEST_METHOD=POST \
+       CONTENT_LENGTH=${#BODY} "$BIN/ntpmon.cgi")
+assert_contains "already exists" "规则已存在" "$RESP"
+
+echo "28i. acl_op: root remove → helper invoked"
+BODY="op=remove&cidr=192.168.137.0/24&csrf_token=$CSRF_VAL"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       QUERY_STRING="action=acl_op" REQUEST_METHOD=POST \
+       CONTENT_LENGTH=${#BODY} "$BIN/ntpmon.cgi")
+assert_contains "remove ok" '"status":"ok"' "$RESP"
+CALLS=$(cat "$FAKE_ACL_STATE/calls.log")
+assert_contains "helper got remove args" "remove 192.168.137.0/24" "$CALLS"
+
+echo "28j. acl_op: removing a nonexistent rule rejected"
+BODY="op=remove&cidr=172.16.0.0/12&csrf_token=$CSRF_VAL"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       QUERY_STRING="action=acl_op" REQUEST_METHOD=POST \
+       CONTENT_LENGTH=${#BODY} "$BIN/ntpmon.cgi")
+assert_contains "not exists" "规则不存在" "$RESP"
+
+echo "28k. acl_op: helper failure surfaced to the UI"
+BODY="op=add&action=allow&cidr=10.99.0.0/16&csrf_token=$CSRF_VAL"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" FAKE_ACL_FAIL=1 \
+       QUERY_STRING="action=acl_op" REQUEST_METHOD=POST \
+       CONTENT_LENGTH=${#BODY} "$BIN/ntpmon.cgi")
+assert_contains "helper error surfaced" "模拟失败" "$RESP"
 
 # ── Users module unit tests (direct API, offline) ──────────────────
 echo ""

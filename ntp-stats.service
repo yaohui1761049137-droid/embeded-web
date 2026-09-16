@@ -1,0 +1,7 @@
+[Unit]
+Description=NTP stats sampler (one-shot, for the web monitor tab)
+After=chrony.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ntp_stats_sample.sh
