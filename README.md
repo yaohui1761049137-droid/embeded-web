@@ -269,6 +269,44 @@ EOF
   `confirmed=1`，或 SSH auth.log 有更新的 Accepted 记录）→ 保留新配置并清文件；
   否则回滚旧值。掉电重启时 `rollback-recover.service` 在开机执行同一检查。
 
+### 时间同步子系统（PPS + TOD + chrony）
+
+板载时基由**独立的授时子系统**提供（独立于本 Web 项目交付），Web 侧只做只读展示
+与受限控制：
+
+```
+UT986 接收机 ── 1PPS 秒脉冲 ─▶ GPIO3_A5 ─(gpiochip 边沿事件,内核时间戳)─┐
+             ── NMEA $GNRMC ─▶ ttyS7   ─(自实现 RMC/ZDA 解析)────────────┤
+                                                                        ▼
+                    pps_tod 守护进程（进程内"整秒+亚秒"配对；纯用户态，零内核改动）
+                      ├─ 粗同步引导：|偏差|>1s 时直写系统钟（无 RTC 板重启场景）
+                      ├─ 写 SysV SHM(0x4e545030) ─▶ chrony refclock SHM 0（单源）
+                      └─ 状态出口 /run/pps_tod/{status,watchdog.state}（逐秒，0644）
+                                                                        ▼
+                    chrony 3.4（PLL 锁钟，实测 µs 级；`chronyc sources` = `#* PPS`）
+```
+
+- **Web 侧数据通路**：
+  - `/run/pps_tod/{status,watchdog.state}` →「时间服务校验设置」Tab（授时状态、看门狗）；
+  - `chronyc` 本地查询（sources/tracking/serverstats）→ 时间 Tab 与「服务监控及报警」Tab 图表；
+  - 接收机模式切换：`timesync.cgi` 向 `/dev/ttyS7` **只写**固定字节
+    `$CFGGNSS/$CFGSAVE` 载荷（不读串口、不碰 termios，避免抢走 pps_tod 的 NMEA）。
+- **pps_tod 日志**（`/var/log/pps_tod/pps_tod_YYYY-MM-DD.log`，人工排查用）：
+  - 按天滚动（次日文件，旧日 gzip）；**默认保留 30 天**（`-R` 可调，`0` 关闭）；
+  - 周期性行 = **每分钟 1 条 `STAT:` 统计汇总**（合格样本数 / offset min-avg-max / 锚点数 /
+    门控·无边沿·无锚点·坏 TOD 四个计数器），约 160KB/天；`-L 0` 可临时回退逐秒原始行；
+  - 事件行（bootstrap / gated / idle / GPIO / 启停 / 日志清理等）逐条保留，带 **HH:MM:SS** 前缀；
+  - 日志样例：
+    ```
+    21:10:20 TOD: opened /dev/ttyS7
+    STAT: window=60s ts=2026-09-16 21:05:38 n=61 off_us min=-58 avg=-1 max=+69 tod_n=61 gated=0 noedge=0 noanchor=0 badtod=0
+    ```
+- **可靠性配套**：`pps_tod_watchdog`（样本断流 30s → 有界重启；参考丢失 → DEGRADED 告警，
+  1 小时 3 次上限；7 项故障注入实测通过）+ RTC 每 6h 保存 + drift 消毒；
+  「服务监控及报警」Tab 提供 NTP 黑白名单与请求量图表（见 `docs/ntp-monitor.md`）。
+- 方案细节与验证记录见 `docs/gps-pps-time-sync.md` 及授时子系统交付文档
+  （`PPS_TOD_chrony-会话交付总结.md`、`鲁班猫2N-PPS-TOD-chrony-实施记录.md`）。
+
 ### 密码策略与迁移（ADR-0002）
 
 - **全新部署**：`db_init admin` 创建的 root 处于「首次登录强制改密」状态——登录成功后会被
