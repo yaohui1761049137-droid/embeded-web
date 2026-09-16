@@ -8,6 +8,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,600;1,400&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/uPlot.min.css">
 </head>
 <body>
 <script>
@@ -181,8 +182,20 @@ if (!document.cookie.match(/csrf_token=/)) {
 
 <div id="tab-monitor" class="tab-content">
 <style>
-/* monitor tab only: canvases fill the panel width (JS handles HiDPI) */
-#tab-monitor canvas { width: 100%; height: auto; display: block; }
+/* monitor tab only: chart theme hooks + summary cards */
+#tab-monitor .chart-empty { color: #9a9aab; font-size: 0.85rem; padding: 2rem 1rem; }
+#tab-monitor .uplot-tip {
+    position: absolute; pointer-events: none; z-index: 10;
+    background: rgba(26, 26, 46, 0.92); color: #fff;
+    font-family: "DM Sans", -apple-system, "Segoe UI", sans-serif;
+    font-size: 0.75rem; line-height: 1.55;
+    padding: 0.45rem 0.65rem; border-radius: 6px; white-space: nowrap;
+}
+#tab-monitor .stat-cards { display: flex; gap: 0.8rem; padding: 0.9rem 1rem 0.2rem; flex-wrap: wrap; }
+#tab-monitor .stat-card { flex: 1 1 140px; background: #fafafe; border: 1px solid #ececf2; border-radius: 8px; padding: 0.55rem 0.8rem; }
+#tab-monitor .stat-card .k { font-size: 0.72rem; color: #9a9aab; }
+#tab-monitor .stat-card .v { font-size: 1.3rem; font-weight: 700; color: #2d2d3a; margin-top: 0.1rem; }
+#tab-monitor .stat-card .v .u { font-size: 0.72rem; color: #9a9aab; font-weight: 400; margin-left: 2px; }
 #tab-monitor .chart-meta { font-size: 0.78rem; color: #8a8a9a; margin: 0.45rem 1rem 0.2rem; }
 </style>
 <h2>服务监控及报警</h2>
@@ -225,7 +238,13 @@ if (!document.cookie.match(/csrf_token=/)) {
 <div class="config-panel">
 <div class="panel-header">chrony 请求量趋势（近 24 小时）</div>
 <div class="panel-body">
-<canvas id="chart-req" width="920" height="260"></canvas>
+<div class="stat-cards">
+<div class="stat-card"><div class="k">当前速率</div><div class="v" id="mon-cur">—<span class="u">条/分</span></div></div>
+<div class="stat-card"><div class="k">近 1 小时请求</div><div class="v" id="mon-hour">—</div></div>
+<div class="stat-card"><div class="k">峰值（条/分）</div><div class="v" id="mon-peak">—</div></div>
+<div class="stat-card"><div class="k">累计（自服务启动）</div><div class="v" id="mon-total">—</div></div>
+</div>
+<div id="chart-req"></div>
 <div class="chart-meta" id="chart-req-meta">加载中...</div>
 </div>
 </div>
@@ -234,7 +253,7 @@ if (!document.cookie.match(/csrf_token=/)) {
 <div class="config-panel">
 <div class="panel-header">各网口 NTP 请求量</div>
 <div class="panel-body">
-<canvas id="chart-eth" width="920" height="240"></canvas>
+<div id="chart-eth"></div>
 <div class="chart-meta" id="chart-eth-meta"></div>
 </div>
 </div>
@@ -363,6 +382,7 @@ if (!document.cookie.match(/csrf_token=/)) {
 </div><!-- end main-content -->
 </div><!-- end app-layout -->
 
+<script src="/uPlot.iife.min.js"></script>
 <script>
 /* ================================================================
    Tab Switching
@@ -374,6 +394,7 @@ function switchTab(tab) {
     for (var i = 0; i < panels.length; i++) panels[i].classList.remove('active');
     document.querySelector('.nav-links a[data-tab="' + tab + '"]').classList.add('active');
     document.getElementById('tab-' + tab).classList.add('active');
+    if (tab === 'monitor' && typeof monitorTabShown === 'function') monitorTabShown();
 }
 
 /* ================================================================
@@ -1135,116 +1156,133 @@ function aclOp(op, action, cidr, okMsg) {
     xhr.send(params);
 }
 
-/* ── chart helpers (hand-rolled canvas, HiDPI aware) ───────────── */
+/* ── charts: uPlot (vendored, offline) + tooltip + summary cards ── */
 
-function setupCanvas(id) {
-    var cv = document.getElementById(id);
-    if (!cv) return null;
-    var dpr = window.devicePixelRatio || 1;
-    var w = cv.clientWidth || 920;
-    var h = parseInt(cv.getAttribute('height'), 10) || 240;
-    cv.width = Math.round(w * dpr);
-    cv.height = Math.round(h * dpr);
-    var ctx = cv.getContext('2d');
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.clearRect(0, 0, w, h);
-    return { ctx: ctx, w: w, h: h };
+var UPLOT_FONT = '"DM Sans", -apple-system, "Segoe UI", sans-serif';
+var CHART_GRID = '#ececf2', CHART_LABEL = '#9a9aab', CHART_LINE = '#6b5b95';
+
+var reqChart = null, ethChart = null;
+var reqCum = [];                                     /* cumulative series, parallel to chart 1 x */
+var ethInfo = { names: [], total: [], hour: [] };
+
+/* compact number for axis/bar labels: 1234 → "1234", 27000 → "2.7万",
+   312500000 → "3.1亿" — keeps long labels short under heavy load */
+function fmtNum(v) {
+    v = Math.round(v);
+    if (v >= 100000000) return (v / 100000000).toFixed(1).replace(/\.0$/, '') + '亿';
+    if (v >= 10000) return (v / 10000).toFixed(1).replace(/\.0$/, '') + '万';
+    return String(v);
 }
 
-function niceMax(v) {
-    if (v <= 5) return 5;
-    var p = Math.pow(10, Math.floor(Math.log(v) / Math.LN10));
-    var m = v / p;
-    var f = m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10;
-    return f * p;
-}
-
-function fmtHHMM(t) {
+function fmtClock(t) {
     var d = new Date(t * 1000);
     return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
 }
 
-/* ── chart 1: request trend (per-minute line + cumulative line) ─ */
+function fmtTs(t) {
+    var d = new Date(t * 1000);
+    return ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2) + ' ' +
+           ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+}
 
+/* tooltip plugin: follows the cursor, flips at container edges */
+function monTooltip(htmlFn) {
+    var tip;
+    return {
+        hooks: {
+            init: function(u) {
+                tip = document.createElement('div');
+                tip.className = 'uplot-tip';
+                tip.style.display = 'none';
+                u.over.appendChild(tip);
+            },
+            setCursor: function(u) {
+                var idx = u.cursor.idx;
+                if (idx == null || u.cursor.left < 0 || u.cursor.top < 0) {
+                    tip.style.display = 'none';
+                    return;
+                }
+                tip.innerHTML = htmlFn(u, idx);
+                tip.style.display = '';
+                var left = u.cursor.left, top = u.cursor.top;
+                var w = tip.offsetWidth, h = tip.offsetHeight;
+                var x = left + 14, y = top + 12;
+                if (x + w > u.over.clientWidth) x = left - w - 14;
+                if (y + h > u.over.clientHeight) y = top - h - 12;
+                tip.style.left = Math.max(0, x) + 'px';
+                tip.style.top = Math.max(0, y) + 'px';
+            },
+        },
+    };
+}
+
+function monAxisY() {
+    return {
+        stroke: CHART_LABEL, font: '11px ' + UPLOT_FONT, size: 48,
+        grid: { stroke: CHART_GRID, width: 1 },
+        ticks: { stroke: CHART_GRID, width: 1 },
+        values: function(u, splits) {
+            return splits.map(function(v) { return fmtNum(v); });
+        },
+    };
+}
+
+/* chart 1: per-minute requests (area).  Cumulative lives in tooltip + cards. */
 function renderReqChart(s, meta) {
-    var c = setupCanvas('chart-req');
-    if (!c) return;
-    var ctx = c.ctx, W = c.w, H = c.h;
-    var L = 52, R = 60, T = 16, B = 26;
-    var pw = W - L - R, ph = H - T - B;
-    var t = (s && s.t) || [], m = (s && s.m) || [], cum = (s && s.c) || [];
+    var el = document.getElementById('chart-req');
     var metaEl = document.getElementById('chart-req-meta');
+    if (!el) return;
+    var t = (s && s.t) || [], m = (s && s.m) || [], cum = (s && s.c) || [];
+    updateMonCards(t, m, cum);
     if (!t.length) {
-        ctx.fillStyle = '#9a9aab'; ctx.font = '13px sans-serif'; ctx.textAlign = 'left';
-        ctx.fillText('暂无采样数据（板上采样器每分钟写入一次）', L, H / 2);
+        if (!reqChart) el.innerHTML = '<p class="chart-empty">暂无采样数据（板上采样器每分钟写入一次）</p>';
         if (metaEl) metaEl.textContent = '';
         return;
     }
-    var t1 = t[t.length - 1], t0 = t1 - 24 * 3600;
-    if (t[0] > t0) t0 = t[0];
-    var mMax = 1, i;
-    for (i = 0; i < m.length; i++) if (m[i] > mMax) mMax = m[i];
-    mMax = niceMax(mMax);
-    var cMax = 1;
-    for (i = 0; i < cum.length; i++) if (cum[i] > cMax) cMax = cum[i];
-    function X(tv) { return L + (tv - t0) / Math.max(1, t1 - t0) * pw; }
-    function Y1(v) { return T + ph - v / mMax * ph; }
-    function Y2(v) { return T + ph - v / cMax * ph; }
-
-    ctx.strokeStyle = '#ececf2'; ctx.lineWidth = 1;
-    ctx.fillStyle = '#9a9aab'; ctx.font = '11px sans-serif'; ctx.textAlign = 'right';
-    for (var g = 0; g <= 4; g++) {
-        var y = T + ph - g * ph / 4;
-        ctx.beginPath(); ctx.moveTo(L, y); ctx.lineTo(L + pw, y); ctx.stroke();
-        ctx.fillText(String(Math.round(mMax * g / 4)), L - 6, y + 3);
+    var data = [t, m.map(function(v) { return v < 0 ? null : v; })];
+    reqCum = cum;
+    if (!reqChart) {
+        el.innerHTML = '';
+        reqChart = new uPlot({
+            width: el.clientWidth || 880, height: 300,
+            padding: [10, 10, 0, 0],
+            legend: { show: false },
+            cursor: { points: { show: false }, drag: { x: false, y: false } },
+            series: [
+                {},
+                {
+                    label: '每分钟请求数',
+                    stroke: CHART_LINE, width: 2,
+                    fill: function(u) {
+                        var g = u.ctx.createLinearGradient(0, u.bbox.top, 0, u.bbox.top + u.bbox.height);
+                        g.addColorStop(0, 'rgba(107,91,149,0.30)');
+                        g.addColorStop(1, 'rgba(107,91,149,0.02)');
+                        return g;
+                    },
+                    value: function(u, v) { return v == null ? '—' : fmtNum(v) + ' 条'; },
+                },
+            ],
+            axes: [
+                {
+                    stroke: CHART_LABEL, font: '11px ' + UPLOT_FONT,
+                    grid: { stroke: CHART_GRID, width: 1 },
+                    ticks: { stroke: CHART_GRID, width: 1 },
+                    values: function(u, splits) {
+                        return splits.map(function(v) { return fmtClock(v); });
+                    },
+                },
+                monAxisY(),
+            ],
+            plugins: [monTooltip(function(u, idx) {
+                var tt = u.data[0][idx], mm = u.data[1][idx], cc = reqCum[idx];
+                return '<b>' + fmtTs(tt) + '</b><br>每分钟 <b>' +
+                       (mm == null ? '—' : fmtNum(mm)) + '</b> 条' +
+                       (cc != null ? '<br>累计 ' + fmtNum(cc) + ' 条' : '');
+            })],
+        }, data, el);
+    } else {
+        reqChart.setData(data);
     }
-    ctx.fillStyle = '#c9c9d6'; ctx.textAlign = 'left';
-    for (var g2 = 0; g2 <= 2; g2++) {
-        var y2 = T + ph - g2 * ph / 2;
-        ctx.fillText(String(Math.round(cMax * g2 / 2)), L + pw + 6, y2 + 3);
-    }
-    ctx.fillStyle = '#9a9aab'; ctx.textAlign = 'center';
-    for (var k = 0; k <= 5; k++) {
-        var tv = t0 + (t1 - t0) * k / 5;
-        ctx.fillText(fmtHHMM(tv), X(tv), H - 8);
-    }
-
-    /* cumulative (light, right axis) */
-    ctx.strokeStyle = 'rgba(120,110,160,0.35)'; ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    var started = false;
-    for (i = 0; i < cum.length; i++) {
-        if (t[i] < t0) continue;
-        if (i > 0 && cum[i] < cum[i - 1]) started = false;   /* counter reset → break */
-        var x = X(t[i]), y = Y2(cum[i]);
-        if (!started) { ctx.moveTo(x, y); started = true; } else { ctx.lineTo(x, y); }
-    }
-    ctx.stroke();
-
-    /* per-minute requests (main, left axis) */
-    ctx.strokeStyle = '#6b5b95'; ctx.lineWidth = 2;
-    ctx.beginPath();
-    started = false;
-    var lastPt = null;
-    for (i = 0; i < m.length; i++) {
-        if (t[i] < t0 || m[i] < 0) { started = false; continue; }
-        var px = X(t[i]), py = Y1(m[i]);
-        if (!started) { ctx.moveTo(px, py); started = true; } else { ctx.lineTo(px, py); }
-        lastPt = [px, py];
-    }
-    ctx.stroke();
-    if (lastPt) {
-        ctx.fillStyle = '#6b5b95';
-        ctx.beginPath(); ctx.arc(lastPt[0], lastPt[1], 3, 0, 6.2832); ctx.fill();
-    }
-
-    /* legend */
-    ctx.textAlign = 'left'; ctx.font = '11px sans-serif';
-    ctx.fillStyle = '#6b5b95'; ctx.fillRect(L + 8, T + 2, 14, 3);
-    ctx.fillStyle = '#6b6a80'; ctx.fillText('每分钟请求数（左轴）', L + 27, T + 7);
-    ctx.fillStyle = 'rgba(120,110,160,0.5)'; ctx.fillRect(L + 148, T + 2, 14, 3);
-    ctx.fillStyle = '#6b6a80'; ctx.fillText('累计请求数（右轴）', L + 167, T + 7);
-
     if (metaEl) {
         var age = meta.csv_age_s;
         metaEl.textContent = '采样点 ' + (meta.samples || 0) +
@@ -1253,50 +1291,89 @@ function renderReqChart(s, meta) {
     }
 }
 
-/* ── chart 2: per-interface request bars ───────────────────────── */
+function updateMonCards(t, m, cum) {
+    function set(id, v, unit) {
+        var el = document.getElementById(id);
+        if (!el) return;
+        el.innerHTML = v + (unit ? '<span class="u">' + unit + '</span>' : '');
+    }
+    if (!t.length) {
+        set('mon-cur', '—', '条/分'); set('mon-hour', '—'); set('mon-peak', '—'); set('mon-total', '—');
+        return;
+    }
+    var last = m[m.length - 1], peak = 0, hourSum = 0, tEnd = t[t.length - 1], i;
+    for (i = 0; i < m.length; i++) {
+        if (m[i] > peak) peak = m[i];
+        if (m[i] >= 0 && tEnd - t[i] <= 3600) hourSum += m[i];
+    }
+    set('mon-cur', last < 0 ? '—' : fmtNum(last), '条/分');
+    set('mon-hour', fmtNum(hourSum));
+    set('mon-peak', fmtNum(peak));
+    set('mon-total', fmtNum(cum.length ? cum[cum.length - 1] : 0));
+}
 
+/* chart 2: per-interface cumulative bars (values via tooltip) */
 function renderEthChart(eth) {
-    var c = setupCanvas('chart-eth');
-    if (!c) return;
-    var ctx = c.ctx, W = c.w, H = c.h;
-    var L = 52, R = 18, T = 20, B = 36;
-    var pw = W - L - R, ph = H - T - B;
-    var names = (eth && eth.names) || [], total = (eth && eth.total) || [],
-        hour = (eth && eth.last_hour) || [];
-    var vmax = 1, i;
-    for (i = 0; i < total.length; i++) if (total[i] > vmax) vmax = total[i];
-    vmax = niceMax(vmax);
-
-    ctx.strokeStyle = '#ececf2'; ctx.fillStyle = '#9a9aab'; ctx.font = '11px sans-serif';
-    for (var g = 0; g <= 4; g++) {
-        var y = T + ph - g * ph / 4;
-        ctx.beginPath(); ctx.moveTo(L, y); ctx.lineTo(L + pw, y); ctx.stroke();
-        ctx.textAlign = 'right';
-        ctx.fillText(String(Math.round(vmax * g / 4)), L - 6, y + 3);
-    }
-    var bw = Math.min(96, pw / (names.length * 1.8));
-    for (i = 0; i < names.length; i++) {
-        var cx = L + pw * (i + 0.5) / names.length;
-        var v = total[i] || 0;
-        var bh = v / vmax * ph;
-        var x = cx - bw / 2, y = T + ph - bh;
-        var grad = ctx.createLinearGradient(0, y, 0, T + ph);
-        grad.addColorStop(0, '#8d7bb5'); grad.addColorStop(1, '#c3b7cf');
-        ctx.fillStyle = grad;
-        ctx.fillRect(x, y, bw, Math.max(bh, 1));
-        ctx.fillStyle = '#5a5a6e'; ctx.textAlign = 'center'; ctx.font = '12px sans-serif';
-        ctx.fillText(String(v), cx, y - 6);
-        ctx.fillStyle = '#7a7a8e';
-        ctx.fillText(names[i], cx, T + ph + 16);
-        ctx.fillStyle = '#9a9aab'; ctx.font = '11px sans-serif';
-        ctx.fillText('近1h +' + (hour[i] || 0), cx, T + ph + 30);
-    }
-    ctx.strokeStyle = '#d8d8e0';
-    ctx.beginPath(); ctx.moveTo(L, T + ph); ctx.lineTo(L + pw, T + ph); ctx.stroke();
-
+    var el = document.getElementById('chart-eth');
     var metaEl = document.getElementById('chart-eth-meta');
+    if (!el || !eth) return;
+    ethInfo = { names: eth.names || [], total: eth.total || [], hour: eth.last_hour || [] };
+    var xs = ethInfo.names.map(function(_, i) { return i; });
+    var data = [xs, ethInfo.total];
+    if (!ethChart) {
+        el.innerHTML = '';
+        ethChart = new uPlot({
+            width: el.clientWidth || 880, height: 240,
+            padding: [10, 10, 0, 0],
+            legend: { show: false },
+            cursor: { points: { show: false }, drag: { x: false, y: false } },
+            series: [
+                {},
+                {
+                    label: '累计请求数',
+                    paths: uPlot.paths.bars({ size: [0.5, 120] }),
+                    fill: function(u) {
+                        var g = u.ctx.createLinearGradient(0, u.bbox.top, 0, u.bbox.top + u.bbox.height);
+                        g.addColorStop(0, '#8d7bb5');
+                        g.addColorStop(1, '#cfc6da');
+                        return g;
+                    },
+                    stroke: 'rgba(107,91,149,0.55)', width: 1,
+                    points: { show: false },
+                    value: function(u, v) { return fmtNum(v || 0); },
+                },
+            ],
+            axes: [
+                {
+                    stroke: CHART_LABEL, font: '12px ' + UPLOT_FONT,
+                    grid: { show: false }, ticks: { show: false },
+                    splits: function() { return xs; },
+                    values: function(u, splits) {
+                        return splits.map(function(i) { return ethInfo.names[i] || ''; });
+                    },
+                },
+                monAxisY(),
+            ],
+            plugins: [monTooltip(function(u, idx) {
+                var i = Math.round(u.data[0][idx]);
+                if (i < 0 || i >= ethInfo.names.length) return '';
+                return '<b>' + ethInfo.names[i] + '</b><br>累计 ' + fmtNum(ethInfo.total[i] || 0) + ' 条' +
+                       '<br>近1h +' + fmtNum(ethInfo.hour[i] || 0);
+            })],
+        }, data, el);
+    } else {
+        ethChart.setData(data);
+    }
     if (metaEl) metaEl.textContent = '累计值为 iptables 计数（规则生效以来，含被拒绝的请求）；设备重启后清零。';
 }
+
+/* keep uPlot instances in sync with container size / tab visibility */
+function monitorTabShown() {
+    var e1 = document.getElementById('chart-req'), e2 = document.getElementById('chart-eth');
+    if (reqChart && e1 && e1.clientWidth > 0) reqChart.setSize({ width: e1.clientWidth, height: 300 });
+    if (ethChart && e2 && e2.clientWidth > 0) ethChart.setSize({ width: e2.clientWidth, height: 240 });
+}
+window.addEventListener('resize', monitorTabShown);
 
 // Initialize
 setupOctetHandlers();

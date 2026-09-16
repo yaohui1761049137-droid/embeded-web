@@ -64,6 +64,23 @@ def check_cgi_contracts(root, errors):
                 errors.append("%s missing handler for action=%s" % (path, action))
 
 
+# Vendored uPlot (monitor charts): both files must exist and be referenced
+# by the page — guards against a deploy that forgets the static assets.
+UPLOT_FILES = (
+    ("uPlot.iife.min.js", "/uPlot.iife.min.js"),
+    ("uPlot.min.css", "/uPlot.min.css"),
+)
+
+
+def check_uplot(root, errors):
+    html = (root / "www" / "control_panel.html").read_text()
+    for fname, ref in UPLOT_FILES:
+        if not (root / "www" / fname).exists():
+            errors.append("missing vendored file www/%s" % fname)
+        if ref not in html:
+            errors.append("control_panel.html does not reference %s" % ref)
+
+
 def check(repo):
     root = Path(repo)
     c_nics = parse_c_nics((root / "src" / "nmcli.c").read_text())
@@ -71,6 +88,7 @@ def check(repo):
 
     errors = []
     check_cgi_contracts(root, errors)
+    check_uplot(root, errors)
     if c_nics != js_nics:
         errors.append("NIC lists drifted: C=%s JS=%s" % (c_nics, js_nics))
     if not js_nics:

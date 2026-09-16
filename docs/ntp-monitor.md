@@ -42,11 +42,20 @@ chrony 3.4 **没有**按网口/接口的统计（`chronyc help` 无接口命令�
 
 - 表格：全用户可看；新增表单与删除按钮**仅 root** 显示（`gate_require_role` 强制）。
 - 删除确认框明示"将重启 chrony（约 1 分钟重新锁定 PPS，计数归零）"。
-- 图表为手写 Canvas（无外部库），60 秒轮询与板端采样同拍；HiDPI 适配。
-- 计数器归零断点：前端对序列中的负差分（`m = -1`）与累计回落处断开折线。
+- 图表引擎：**uPlot v1.6.32**（vendored：`www/uPlot.iife.min.js` + `uPlot.min.css`，MIT；
+  sha256 记录：js `19c8d4c6ad88929a79f4ae49d6f7161566dfd0ba3d15cc495e974f787eb78f1f`、
+  css `df630c6a8d6f8eeaff264b50f73ce5b114f646ffd9a0bb74f049b0a00135fa04`）。
+  本地静态文件，板端离线可用（不依赖 CDN）。
+- 图 1「请求量趋势」：单主轴=每分钟请求数（面积渐变）；悬停十字线 + tooltip 显示
+  时间 / 每分钟 / 累计；顶部**数字卡**＝当前速率 · 近 1 小时请求 · 峰值 · 累计
+  （累计语义：自 chronyd 启动，重启清零，卡片标题已注明）。
+- 图 2「各网口请求量」：uPlot bars（eth0-3 分类轴，累计值）；tooltip 显示累计 + 近 1h 增量。
+- 60 秒轮询用 `setData()` 就地更新（光标不跳）；切到该 Tab / 窗口缩放触发 `setSize` 重排。
+- 计数器归零断点：`m = -1` 转为 `null`（uPlot 自动断线）；累计归零自然回落到 0。
 
 ## 5. 测试与离线桩
 
 - `test_gate.sh` Test 28-28k：假 helper（`NTPMON_HELPER_OVERRIDE`）记录参数、
   `NTPMON_ACL_FILE`/`NTPMON_CSV` 指临时文件，覆盖解析、降级、权限、校验、失败透传。
-- `test_frontend.py`：断言 `ntpmon.cgi` 的 `stats`/`acl_op` 两个 action 在前后端同时存在。
+- `test_frontend.py`：断言 `ntpmon.cgi` 的 `stats`/`acl_op` 两个 action 在前后端同时存在；
+  并断言两个 uPlot 静态文件存在且被页面引用（防部署漏拷）。

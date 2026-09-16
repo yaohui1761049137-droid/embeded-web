@@ -24,7 +24,7 @@
 - **NTP 访问控制**（chrony allow/deny 黑白名单表格，root 专属；新增走 chronyc 运行时 ACL
   即时生效、删除重启重载；CIDR 双重校验 + CSRF，操作入审计）
 - **NTP 流量监控**（近 24h 请求量趋势 + 四网口请求量柱状图；chronyc serverstats 与 iptables
-  每网口计数每分钟采样落盘，手写 Canvas 渲染）
+  每网口计数每分钟采样落盘；uPlot 渲染，悬停读数 + 摘要数字卡）
 - **业务审计日志**（网络配置修改、接收机模式切换、NTP 黑白名单变更自动记录操作者和时间到 `audit_log` 表）
 - **SQLite 存储**（WAL 模式，多进程 CGI 并发安全）
 - **120 项自动化测试**（`test_gate.sh`，宿主机离线全绿，含 NMCLI_OVERRIDE / CHRONYC_OVERRIDE / NTPMON_HELPER_OVERRIDE 假命令）
@@ -117,7 +117,9 @@ embeded_Lighttpd/
 │   ├── index.html             登录页面
 │   ├── control_panel.html     控制面板（7 Tab；网口由 NICS 注册表驱动，时间同步/NTP 监控见对应 Tab）
 │   ├── change.html            修改密码页面（自改密入口）
-│   └── style.css              全局样式
+│   ├── style.css              全局样式
+│   ├── uPlot.iife.min.js      图表库（vendored v1.6.32，MIT，离线可用）
+│   └── uPlot.min.css          图表库样式（vendored）
 ├── docs/adr/                  ADR 决策记录（0002 = 密码策略，0003 = 本地网络配置）
 ├── docs/ntp-monitor.md        NTP 监控设计说明（数据源、ACL 语义与重启策略）
 ├── rollback_watchdog.sh       eth0 回滚看门狗（systemd-run 触发 + 开机恢复双入口）
@@ -207,7 +209,7 @@ ssh root@<board> '
   cp *.cgi /home/www/cgi-bin/
   chown www-data:www-data /home/www/cgi-bin/*.cgi
   chmod 755 /home/www/cgi-bin/*.cgi
-  cp control_panel.html index.html style.css change.html /home/www/
+  cp control_panel.html index.html style.css change.html uPlot.iife.min.js uPlot.min.css /home/www/
 '
 
 # 3. www-data sudoers 白名单（nmcli 调用入口，务必先于任何网络配置使用）
