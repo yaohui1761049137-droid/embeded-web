@@ -292,7 +292,8 @@ UT986 接收机 ── 1PPS 秒脉冲 ─▶ GPIO3_A5 ─(gpiochip 边沿事件,
   - 接收机模式切换：`timesync.cgi` 向 `/dev/ttyS7` **只写**固定字节
     `$CFGGNSS/$CFGSAVE` 载荷（不读串口、不碰 termios，避免抢走 pps_tod 的 NMEA）。
 - **pps_tod 日志**（`/var/log/pps_tod/pps_tod_YYYY-MM-DD.log`，人工排查用）：
-  - 按天滚动（次日文件，旧日 gzip）；**默认保留 30 天**（`-R` 可调，`0` 关闭）；
+  - 按天滚动（次日封存压缩为 .gz，长期保留，不按时间清理）；总容量超过 **100MB** 时
+    才自动删除最旧的日志（`-R <MB>` 可调，`0` = 不清理；当天文件永不删除）；
   - 周期性行 = **每分钟 1 条 `STAT:` 统计汇总**（合格样本数 / offset min-avg-max / 锚点数 /
     门控·无边沿·无锚点·坏 TOD 四个计数器），约 160KB/天；`-L 0` 可临时回退逐秒原始行；
   - 事件行（bootstrap / gated / idle / GPIO / 启停 / 日志清理等）逐条保留，带 **HH:MM:SS** 前缀；
