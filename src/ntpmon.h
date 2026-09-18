@@ -44,8 +44,14 @@ int ntpmon_cidr_valid(const char *cidr);
  * Returns the rule count, or -1 if the file cannot be read. */
 int ntpmon_acl_load(NtpAclRule *out, int max);
 
-/* Find a rule by CIDR (either action).  Returns index or -1. */
-int ntpmon_acl_find(const NtpAclRule *rules, int n, const char *cidr);
+/* Find a rule by (action, CIDR).  Pass action = NULL to match on the CIDR
+ * alone (legacy callers).  Returns index or -1.
+ * Matching on the action too is what lets allow and deny coexist for the same
+ * prefix — chrony accepts both and applies deny at equal prefix length, so
+ * flipping a subnet from allow to deny no longer requires a delete first
+ * (which would restart chronyd and zero the counters). */
+int ntpmon_acl_find(const NtpAclRule *rules, int n,
+                    const char *action, const char *cidr);
 
 /* Apply a rule change through the helper (sudo -n on the board).
  * op = "add" (uses action) or "remove".  Returns 0 on success, -1 with

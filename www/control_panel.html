@@ -58,6 +58,7 @@ if (!document.cookie.match(/csrf_token=/)) {
 <a data-tab="timesync" onclick="switchTab('timesync')">时间服务校验设置</a>
 <a data-tab="redundancy" onclick="switchTab('redundancy')">主备协同配置</a>
 	<a data-tab="usermgr" onclick="switchTab('usermgr');loadUserList()" id="nav-usermgr" style="display:none">用户管理</a>
+	<a data-tab="log" onclick="switchTab('log');loadLogSources()" id="nav-log" style="display:none">系统日志</a>
 	<a href="/change.html">修改密码</a>
 	</div>
 </nav>
@@ -197,8 +198,39 @@ if (!document.cookie.match(/csrf_token=/)) {
 #tab-monitor .stat-card .v { font-size: 1.3rem; font-weight: 700; color: #2d2d3a; margin-top: 0.1rem; }
 #tab-monitor .stat-card .v .u { font-size: 0.72rem; color: #9a9aab; font-weight: 400; margin-left: 2px; }
 #tab-monitor .chart-meta { font-size: 0.78rem; color: #8a8a9a; margin: 0.45rem 1rem 0.2rem; }
+/* per-interface client filter: a segmented control that lives in the panel
+   header, so no separate control band sits between the title and the table
+   head.  The active state reuses the site-wide selected look (a tinted wash
+   rather than a solid fill) from .nav-links a.active. */
+#tab-monitor .panel-header.nic-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 0.8rem; row-gap: 0.5rem; text-align: left; flex-wrap: wrap;
+}
+#tab-monitor .nic-seg { display: flex; gap: 0.3rem; row-gap: 0.3rem; flex-wrap: wrap; }
+#tab-monitor .nic-seg button {
+    font-family: inherit; font-size: 0.78rem; font-weight: 500;
+    padding: 0.26rem 0.72rem; border-radius: 999px;
+    border: 1px solid #e0dce8; background: #fff; color: #7a7a8a; cursor: pointer;
+}
+#tab-monitor .nic-seg button:hover { color: #3d3d4a; background: rgba(196, 181, 208, 0.12); }
+#tab-monitor .nic-seg button.active {
+    color: #7a6a8a; background: rgba(196, 181, 208, 0.28); border-color: #c4b5d0;
+}
 </style>
 <h2>服务监控及报警</h2>
+
+<!-- Page-level time range.  Reuses the app's connected-rectangle segmented
+     control (.board-tab), deliberately NOT the rounded pills used for the
+     interface filter: time and interface are orthogonal dimensions and the
+     two controls must not read as the same kind of thing. -->
+<div style="display:flex; align-items:center; gap:0.8rem; margin-bottom:1rem">
+<span style="font-size:0.85rem; color:#6a6a7a; white-space:nowrap">时间范围</span>
+<div class="board-tabs" id="mon-range" style="flex:0 0 auto">
+<a class="board-tab active" data-win="3600"  onclick="setMonWindow(3600)">近 1 小时</a>
+<a class="board-tab"        data-win="18000" onclick="setMonWindow(18000)">近 5 小时</a>
+<a class="board-tab"        data-win="86400" onclick="setMonWindow(86400)">近 24 小时</a>
+</div>
+</div>
 
 <!-- NTP 访问控制（黑白名单） -->
 <div class="config-panel">
@@ -236,11 +268,11 @@ if (!document.cookie.match(/csrf_token=/)) {
 
 <!-- 请求量趋势 -->
 <div class="config-panel">
-<div class="panel-header">chrony 请求量趋势（近 24 小时）</div>
+<div class="panel-header">chrony 请求量趋势（<span id="ttl-req">近 1 小时</span>）</div>
 <div class="panel-body">
 <div class="stat-cards">
 <div class="stat-card"><div class="k">当前速率</div><div class="v" id="mon-cur">—<span class="u">条/分</span></div></div>
-<div class="stat-card"><div class="k">近 1 小时请求</div><div class="v" id="mon-hour">—</div></div>
+<div class="stat-card"><div class="k" id="mon-hour-k">窗口内请求</div><div class="v" id="mon-hour">—</div></div>
 <div class="stat-card"><div class="k">峰值（条/分）</div><div class="v" id="mon-peak">—</div></div>
 <div class="stat-card"><div class="k">累计（自服务启动）</div><div class="v" id="mon-total">—</div></div>
 </div>
@@ -256,6 +288,41 @@ if (!document.cookie.match(/csrf_token=/)) {
 <div id="chart-eth"></div>
 <div class="chart-meta" id="chart-eth-meta"></div>
 </div>
+</div>
+
+<!-- 各网口授时服务状态 -->
+<div class="config-panel">
+<div class="panel-header">各网口授时服务状态（<span id="ttl-nic">近 1 小时</span>）</div>
+<div class="panel-body" style="padding:0">
+<table class="user-table" id="nic-status-table">
+<thead>
+<tr><th>网口</th><th>请求</th><th>有效 NTP</th><th>应答</th><th>应答率</th><th>客户端数</th></tr>
+</thead>
+<tbody id="nic-status-body">
+<tr><td colspan="6" class="placeholder-text" style="padding:1.5rem">加载中...</td></tr>
+</tbody>
+</table>
+</div>
+<p class="chart-meta" id="nic-meta"></p>
+</div>
+
+<!-- 客户端明细 -->
+<div class="config-panel">
+<div class="panel-header nic-head">
+<span>客户端明细（<span id="ttl-cli">近 1 小时活跃</span>）</span>
+<span class="nic-seg" id="nic-client-seg"></span>
+</div>
+<div class="panel-body" style="padding:0">
+<table class="user-table" id="nic-client-table">
+<thead>
+<tr><th>客户端 IP</th><th>累计请求</th><th>累计有效 NTP</th><th>最后活跃</th></tr>
+</thead>
+<tbody id="nic-client-body">
+<tr><td colspan="4" class="placeholder-text" style="padding:1.5rem">加载中...</td></tr>
+</tbody>
+</table>
+</div>
+<div class="chart-meta">仅列出近 1 小时内有请求的客户端，按累计请求数排序、每网口最多 32 个；请求数为该客户端被本进程见到起的累计值。仅统计入向 UDP/123 包（含未通过 ACL 的请求）。</div>
 </div>
 
 </div>
@@ -377,6 +444,42 @@ if (!document.cookie.match(/csrf_token=/)) {
 	</div>
 
 	<span id="usermgr-status"></span>
+	</div>
+
+	<!-- Tab 8: 系统日志（root only） -->
+	<div id="tab-log" class="tab-content">
+	<h2>系统日志</h2>
+
+	<div class="config-panel">
+	<div class="panel-header">日志查看</div>
+	<div class="panel-body">
+	<table class="config-table">
+	<tr>
+	<td class="config-label">日志来源</td>
+	<td class="config-value">
+	<select id="log-source" style="padding:0.45rem 0.6rem; border:1.5px solid #e0e0e8; border-radius:6px; font-family:inherit"></select>
+	<select id="log-lines" style="padding:0.45rem 0.6rem; margin-left:0.5rem; border:1.5px solid #e0e0e8; border-radius:6px; font-family:inherit">
+	<option value="100">100 行</option>
+	<option value="200" selected>200 行</option>
+	<option value="500">500 行</option>
+	</select>
+	<input type="text" id="log-grep" class="input-full" style="width:170px; margin-left:0.5rem"
+	       placeholder="关键字过滤（可选）" maxlength="64" autocomplete="off">
+	<button class="btn-set" style="padding:0.5rem 1.4rem; margin-left:0.6rem" onclick="loadLogTail()">刷新</button>
+	<label style="margin-left:0.9rem; font-size:0.85rem; color:#6a6a7a; white-space:nowrap">
+	<input type="checkbox" id="log-auto" onchange="toggleLogAuto()"> 自动刷新（10s）
+	</label>
+	</td>
+	</tr>
+	</table>
+	<p class="tab-status" id="log-meta">选择日志来源后自动加载。</p>
+	</div>
+	<div class="panel-body" style="padding:0">
+	<pre id="log-view" style="margin:0; padding:0.9rem 1rem; max-height:520px; overflow:auto;
+	     background:#fafafe; border-top:1px solid #f0f0f3; font-family:Consolas,"SF Mono",monospace;
+	     font-size:0.76rem; line-height:1.5; color:#2d2d3a; white-space:pre;">（未加载）</pre>
+	</div>
+	</div>
 	</div>
 
 </div><!-- end main-content -->
@@ -651,13 +754,76 @@ function setStatus(msg, type) {
    User Management — root only (Tab 7)
    ================================================================ */
 
-/* Show/hide user management nav link based on role */
+/* Show/hide root-only nav links based on role.
+   (The backend enforces the same gate — hiding is cosmetic.) */
 (function() {
-    if (window._currentUser && window._currentUser.role === 'root') {
-        var el = document.getElementById('nav-usermgr');
+    if (!window._currentUser || window._currentUser.role !== 'root') return;
+    ['nav-usermgr', 'nav-log'].forEach(function(id) {
+        var el = document.getElementById(id);
         if (el) el.style.display = '';
-    }
+    });
 })();
+
+/* ================================================================
+   System log viewer — root only (Tab 8)
+   ================================================================ */
+var logTimer = null;
+
+function loadLogSources() {
+    var sel = document.getElementById('log-source');
+    if (!sel) return;
+    fetch('/cgi-bin/log.cgi?action=sources', { credentials: 'same-origin' })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            if (d.status !== 'ok') return;
+            if (sel.dataset.loaded) { loadLogTail(); return; }
+            sel.innerHTML = '';
+            (d.sources || []).forEach(function(s) {
+                var o = document.createElement('option');
+                o.value = s.id;
+                o.textContent = s.label + (s.exists ? '' : '（不存在）');
+                sel.appendChild(o);
+            });
+            sel.dataset.loaded = '1';
+            sel.onchange = loadLogTail;
+            loadLogTail();
+        })
+        .catch(function() {
+            var meta = document.getElementById('log-meta');
+            if (meta) meta.textContent = '无法读取日志源列表（权限或网络）';
+        });
+}
+
+function loadLogTail() {
+    var sel = document.getElementById('log-source');
+    var view = document.getElementById('log-view');
+    var meta = document.getElementById('log-meta');
+    if (!sel || !view || !sel.value) return;
+    var url = '/cgi-bin/log.cgi?action=tail&id=' + encodeURIComponent(sel.value) +
+              '&lines=' + encodeURIComponent(document.getElementById('log-lines').value) +
+              (document.getElementById('log-grep').value
+                   ? '&grep=' + encodeURIComponent(document.getElementById('log-grep').value) : '');
+    fetch(url, { credentials: 'same-origin' })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            if (d.status !== 'ok') { view.textContent = '加载失败：' + (d.message || ''); return; }
+            if (!d.exists)             view.textContent = '（日志文件不存在：' + d.path + '）';
+            else if (!d.lines.length)  view.textContent = '（无匹配内容）';
+            else                       view.textContent = d.lines.join('\n');
+            view.scrollTop = view.scrollHeight;
+            meta.textContent = d.path + ' — ' + d.size + ' 字节，匹配 ' + d.matched +
+                ' 行，显示最后 ' + d.returned + ' 行' +
+                (d.truncated ? '（更早的匹配行未显示）' : '') +
+                (d.windowed ? '；仅读取文件尾部 256KB' : '');
+        })
+        .catch(function() { view.textContent = '加载失败（网络或权限）'; });
+}
+
+function toggleLogAuto() {
+    var on = document.getElementById('log-auto').checked;
+    if (logTimer) { clearInterval(logTimer); logTimer = null; }
+    if (on) logTimer = setInterval(loadLogTail, 10000);
+}
 
 function loadUserList() {
     var tbody = document.getElementById('user-list-body');
@@ -1081,9 +1247,12 @@ function loadNtpMon() {
         try {
             var r = JSON.parse(xhr.responseText);
             if (r.status != 'ok') { monSetStatus('错误: ' + (r.message || ''), 'error'); return; }
+            reqSeries = r.series; reqMeta = r.meta; ethSeries = r.eth;
             renderAclPanel(r.acl);
             renderReqChart(r.series, r.meta);
             renderEthChart(r.eth);
+            renderNicPanel(r.nic);
+            markMonRange();
         } catch(e) { monSetStatus('解析失败', 'error'); }
     };
     xhr.onerror = function() { monSetStatus('网络错误', 'error'); };
@@ -1103,7 +1272,7 @@ function renderAclPanel(acl) {
                 ? '<span style="color:#4a8a5a;font-weight:600">allow</span>'
                 : '<span style="color:#c45050;font-weight:600">deny</span>';
             var op = isRoot
-                ? '<button class="btn-set" style="padding:0.25rem 0.9rem" onclick="aclRemove(\'' + r.cidr + '\')">删除</button>'
+                ? '<button class="btn-set" style="padding:0.25rem 0.9rem" onclick="aclRemove(\'' + r.action + '\',\'' + r.cidr + '\')">删除</button>'
                 : '—';
             rows += '<tr><td>' + act + '</td><td>' + escHtml(r.cidr) + '</td><td>' + op + '</td></tr>';
         }
@@ -1123,9 +1292,11 @@ function aclAdd() {
     aclOp('add', action, cidr, '已添加 ' + action + ' ' + cidr + '（即时生效）');
 }
 
-function aclRemove(cidr) {
-    if (!confirm('确认删除规则 ' + cidr + ' ？\n\n删除将重启 chrony 以重载配置：约 1 分钟内重新锁定 PPS，请求计数归零。')) return;
-    aclOp('remove', '', cidr, '已删除 ' + cidr);
+function aclRemove(action, cidr) {
+    /* The action is part of the identity: after this change allow and deny
+       may coexist for the same prefix, so removal must say which one. */
+    if (!confirm('确认删除规则 ' + action + ' ' + cidr + ' ？\n\n删除将重启 chrony 以重载配置：约 1 分钟内重新锁定 PPS，请求计数归零。')) return;
+    aclOp('remove', action, cidr, '已删除 ' + action + ' ' + cidr);
 }
 
 function aclOp(op, action, cidr, okMsg) {
@@ -1163,6 +1334,48 @@ var CHART_GRID = '#ececf2', CHART_LABEL = '#9a9aab', CHART_LINE = '#6b5b95';
 
 var reqChart = null, ethChart = null;
 var reqCum = [];                                     /* cumulative series, parallel to chart 1 x */
+var reqSparse = true;   /* few non-zero minutes → mark the bursts with dots */
+var monWindow = 3600;   /* page-level time range, survives the 60s poll */
+var reqSeries = null, reqMeta = null, ethSeries = null;  /* last payload, for
+                                     re-rendering on a range switch */
+var monWinSfx = '1h';
+
+function monWinLabel() {
+    return monWindow === 3600 ? '近 1 小时'
+         : monWindow === 18000 ? '近 5 小时' : '近 24 小时';
+}
+
+/* Switching the range is purely local: the stats payload already carries all
+   three windows (eth.last_*, nic.*_N, and a 24h series), so nothing is
+   refetched — the panels just re-render against the same snapshot. */
+function setMonWindow(w) {
+    monWindow = w;
+    monWinSfx = (w === 3600) ? '1h' : (w === 18000) ? '5h' : '24h';
+    markMonRange();
+    if (typeof nicInfo !== 'undefined' && nicInfo) {
+        renderReqChart(reqSeries, reqMeta);
+        renderEthChart(ethSeries);
+        renderNicPanel(nicInfo);
+    }
+}
+
+function markMonRange() {
+    var box = document.getElementById('mon-range');
+    if (!box) return;
+    Array.prototype.forEach.call(box.children, function(a) {
+        if (parseInt(a.dataset.win, 10) === monWindow) a.classList.add('active');
+        else a.classList.remove('active');
+    });
+    var lab = monWinLabel();
+    var r = document.getElementById('ttl-req');
+    var n = document.getElementById('ttl-nic');
+    var c = document.getElementById('ttl-cli');
+    if (r) r.textContent = lab;
+    if (n) n.textContent = lab;
+    if (c) c.textContent = lab + '活跃';
+    var k = document.getElementById('mon-hour-k');
+    if (k) k.textContent = '窗口内请求';
+}
 var ethInfo = { names: [], total: [], hour: [] };
 
 /* compact number for axis/bar labels: 1234 → "1234", 27000 → "2.7万",
@@ -1216,9 +1429,15 @@ function monTooltip(htmlFn) {
     };
 }
 
-function monAxisY() {
+/* Left (value) axis.  `label` names the unit — without it the chart shows
+   bare numbers and the reader has to infer the meaning from the cards. */
+function monAxisY(label) {
     return {
         stroke: CHART_LABEL, font: '11px ' + UPLOT_FONT, size: 48,
+        label: label || null,
+        labelFont: '11px ' + UPLOT_FONT,
+        labelSize: label ? 30 : 0,
+        labelGap: 6,
         grid: { stroke: CHART_GRID, width: 1 },
         ticks: { stroke: CHART_GRID, width: 1 },
         values: function(u, splits) {
@@ -1233,6 +1452,13 @@ function renderReqChart(s, meta) {
     var metaEl = document.getElementById('chart-req-meta');
     if (!el) return;
     var t = (s && s.t) || [], m = (s && s.m) || [], cum = (s && s.c) || [];
+    /* Crop to the selected range.  The payload always carries up to 24h, so
+       the shorter ranges cost nothing extra on the wire. */
+    if (t.length) {
+        var cut = t[t.length - 1] - monWindow, lo = 0;
+        while (lo < t.length && t[lo] < cut) lo++;
+        if (lo > 0) { t = t.slice(lo); m = m.slice(lo); cum = cum.slice(lo); }
+    }
     updateMonCards(t, m, cum);
     if (!t.length) {
         if (!reqChart) el.innerHTML = '<p class="chart-empty">暂无采样数据（板上采样器每分钟写入一次）</p>';
@@ -1241,6 +1467,11 @@ function renderReqChart(s, meta) {
     }
     var data = [t, m.map(function(v) { return v < 0 ? null : v; })];
     reqCum = cum;
+    {
+        var nz = 0, k;
+        for (k = 0; k < m.length; k++) if (m[k] > 0) nz++;
+        reqSparse = (nz <= 200);   /* >200 busy minutes: the fill carries it */
+    }
     if (!reqChart) {
         el.innerHTML = '';
         reqChart = new uPlot({
@@ -1260,6 +1491,19 @@ function renderReqChart(s, meta) {
                         return g;
                     },
                     value: function(u, v) { return v == null ? '—' : fmtNum(v) + ' 条'; },
+                    /* A one-minute burst is a single sample: at 24h across
+                       ~900px that is a sub-pixel spike, easy to miss and hard
+                       to hit with the cursor.  Mark the non-zero samples with
+                       a dot, but only while the series is sparse enough that
+                       the dots read as markers rather than as a second line. */
+                    points: {
+                        show: function(u, sidx, i) {
+                            return reqSparse && (u.data[1][i] || 0) > 0;
+                        },
+                        size: 5,
+                        fill: CHART_LINE,
+                        stroke: CHART_LINE,
+                    },
                 },
             ],
             axes: [
@@ -1271,7 +1515,7 @@ function renderReqChart(s, meta) {
                         return splits.map(function(v) { return fmtClock(v); });
                     },
                 },
-                monAxisY(),
+                monAxisY('条/分钟'),
             ],
             plugins: [monTooltip(function(u, idx) {
                 var tt = u.data[0][idx], mm = u.data[1][idx], cc = reqCum[idx];
@@ -1304,7 +1548,7 @@ function updateMonCards(t, m, cum) {
     var last = m[m.length - 1], peak = 0, hourSum = 0, tEnd = t[t.length - 1], i;
     for (i = 0; i < m.length; i++) {
         if (m[i] > peak) peak = m[i];
-        if (m[i] >= 0 && tEnd - t[i] <= 3600) hourSum += m[i];
+        if (m[i] >= 0 && tEnd - t[i] <= monWindow) hourSum += m[i];
     }
     set('mon-cur', last < 0 ? '—' : fmtNum(last), '条/分');
     set('mon-hour', fmtNum(hourSum));
@@ -1312,12 +1556,114 @@ function updateMonCards(t, m, cum) {
     set('mon-total', fmtNum(cum.length ? cum[cum.length - 1] : 0));
 }
 
+/* ── per-interface serving status + client detail ──────────────── */
+
+var nicInfo = null;
+var nicSelected = '';      /* survives the 60s poll */
+
+function renderNicPanel(nic) {
+    var tbody = document.getElementById('nic-status-body');
+    var cbody = document.getElementById('nic-client-body');
+    var meta = document.getElementById('nic-meta');
+    if (!tbody || !cbody) return;
+    if (!nic || !nic.ok) {
+        tbody.innerHTML = '<tr><td colspan="6" class="placeholder-text" style="padding:1.5rem">' +
+            '采集进程未运行（ntp-nic-monitor.service）—— 每网口客户端明细不可用。</td></tr>';
+        cbody.innerHTML = '<tr><td colspan="4" class="placeholder-text" style="padding:1.5rem">—</td></tr>';
+        if (meta) meta.textContent = '';
+        return;
+    }
+    nicInfo = nic;
+    var rows = '';
+    (nic.nics || []).forEach(function(n) {
+        /* Trailing-hour window for every column, so the row and the client
+           list below it share one time base.  Falls back to the cumulative
+           counters if an older daemon is still running during an upgrade. */
+        var q  = (n['req_'   + monWinSfx] !== undefined) ? n['req_'   + monWinSfx] : n.req;
+        var qv = (n['valid_' + monWinSfx] !== undefined) ? n['valid_' + monWinSfx] : n.valid;
+        var qr = (n['rsp_'   + monWinSfx] !== undefined) ? n['rsp_'   + monWinSfx] : n.rsp;
+        var rate = q > 0 ? Math.round(qr * 100 / q) : null;
+        var style = '';
+        if (rate !== null && rate < 95) style = (rate >= 80) ? ' style="color:#b8860b"' : ' style="color:#c0392b"';
+        var cl = (nic.clients && nic.clients[n.name]) ? nic.clients[n.name].length : 0;
+        rows += '<tr><td>' + n.name + '</td><td>' + fmtNum(q) + '</td><td>' + fmtNum(qv) +
+                '</td><td>' + fmtNum(qr) + '</td><td' + style + '>' +
+                (rate === null ? '—' : rate + '%') + '</td><td>' + cl + '</td></tr>';
+    });
+    tbody.innerHTML = rows ||
+        '<tr><td colspan="6" class="placeholder-text" style="padding:1.5rem">无数据</td></tr>';
+    if (meta) {
+        meta.textContent = '统计窗口为' + monWinLabel() + '（与下方客户端列表同窗口）；应答量取自 iptables OUTPUT 计数' +
+            (nic.age_s >= 0 ? '；快照 ' + nic.age_s + ' 秒前' : '') +
+            (nic.age_s > 30 ? '  ⚠ 采集进程可能已停止' : '');
+    }
+    renderNicClients();
+}
+
+/* Build the interface pills only when the interface set changes: rebuilding
+   them on every 60s poll would flicker and drop keyboard focus. */
+function renderNicSeg(names) {
+    var seg = document.getElementById('nic-client-seg');
+    if (!seg) return;
+    var key = names.join(',');
+    if (seg.dataset.names !== key) {
+        seg.innerHTML = '';
+        names.forEach(function(nm) {
+            var b = document.createElement('button');
+            b.type = 'button';
+            b.textContent = nm;
+            b.dataset.nic = nm;
+            b.onclick = function() {
+                nicSelected = nm;
+                markNicSeg();
+                renderNicClients();
+            };
+            seg.appendChild(b);
+        });
+        seg.dataset.names = key;
+        /* keep the user's choice across polls; fall back if it vanished */
+        if (names.indexOf(nicSelected) < 0) nicSelected = names[0] || '';
+    }
+    markNicSeg();
+}
+
+function markNicSeg() {
+    var seg = document.getElementById('nic-client-seg');
+    if (!seg) return;
+    Array.prototype.forEach.call(seg.children, function(b) {
+        if (b.dataset.nic === nicSelected) b.classList.add('active');
+        else b.classList.remove('active');
+    });
+}
+
+function renderNicClients() {
+    var cbody = document.getElementById('nic-client-body');
+    if (!cbody || !nicInfo || !nicInfo.ok) return;
+    var names = (nicInfo.nics || []).map(function(n) { return n.name; });
+    renderNicSeg(names);
+    /* The daemon keeps clients for the widest range; the list itself is
+       filtered here so a range switch needs no refetch. */
+    var list = ((nicInfo.clients && nicInfo.clients[nicSelected]) || [])
+        .filter(function(c) { return c.last_age_s <= monWindow; });
+    if (!list.length) {
+        cbody.innerHTML = '<tr><td colspan="4" class="placeholder-text" style="padding:1.5rem">' +
+            (nicSelected || '该网口') + ' 在' + monWinLabel() + '内无客户端（无入向 UDP/123 流量）</td></tr>';
+        return;
+    }
+    cbody.innerHTML = list.map(function(c) {
+        return '<tr><td>' + c.ip + '</td><td>' + fmtNum(c.req) + '</td><td>' + fmtNum(c.valid) +
+               '</td><td>' + c.last_age_s + ' 秒前</td></tr>';
+    }).join('');
+}
+
 /* chart 2: per-interface cumulative bars (values via tooltip) */
 function renderEthChart(eth) {
+    /* `eth` carries last_1h / last_5h / last_24h; pick the active one. */
     var el = document.getElementById('chart-eth');
     var metaEl = document.getElementById('chart-eth-meta');
     if (!el || !eth) return;
-    ethInfo = { names: eth.names || [], total: eth.total || [], hour: eth.last_hour || [] };
+    ethInfo = { names: eth.names || [], total: eth.total || [],
+                hour: eth['last_' + monWinSfx] || eth.last_hour || [] };
     var xs = ethInfo.names.map(function(_, i) { return i; });
     var data = [xs, ethInfo.total];
     if (!ethChart) {
@@ -1327,6 +1673,11 @@ function renderEthChart(eth) {
             padding: [10, 10, 0, 0],
             legend: { show: false },
             cursor: { points: { show: false }, drag: { x: false, y: false } },
+            /* The category axis spans 0..3; without a half-unit margin the
+               last label is centred on the right edge and gets clipped
+               ("eth3" rendered as "eth:"), and the end bars overhang the
+               plot.  Extending the range also spaces the four bars evenly. */
+            scales: { x: { range: [-0.5, 3.5] } },
             series: [
                 {},
                 {
@@ -1352,19 +1703,20 @@ function renderEthChart(eth) {
                         return splits.map(function(i) { return ethInfo.names[i] || ''; });
                     },
                 },
-                monAxisY(),
+                monAxisY('累计请求数'),
             ],
             plugins: [monTooltip(function(u, idx) {
                 var i = Math.round(u.data[0][idx]);
                 if (i < 0 || i >= ethInfo.names.length) return '';
                 return '<b>' + ethInfo.names[i] + '</b><br>累计 ' + fmtNum(ethInfo.total[i] || 0) + ' 条' +
-                       '<br>近1h +' + fmtNum(ethInfo.hour[i] || 0);
+                       '<br>' + monWinLabel() + ' +' + fmtNum(ethInfo.hour[i] || 0);
             })],
         }, data, el);
     } else {
         ethChart.setData(data);
     }
-    if (metaEl) metaEl.textContent = '累计值为 iptables 计数（规则生效以来，含被拒绝的请求）；设备重启后清零。';
+    if (metaEl) metaEl.textContent = '柱高为 iptables 计数（规则生效以来，含被拒绝的请求；设备重启后清零），' +
+        '悬停显示所选时间范围内的增量。';
 }
 
 /* keep uPlot instances in sync with container size / tab visibility */

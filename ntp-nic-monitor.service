@@ -1,0 +1,26 @@
+[Unit]
+Description=Per-interface NTP serving monitor (AF_PACKET clients + iptables responses)
+Documentation=file:/home/www/control_panel.html
+After=network.target chrony.service
+Wants=chrony.service
+
+[Service]
+Type=simple
+# Needs CAP_NET_RAW for AF_PACKET and root for `iptables -I OUTPUT`.
+User=root
+ExecStart=/usr/local/bin/ntp_nic_monitor -f /var/db/ntp_nic.json -i 5
+Restart=always
+RestartSec=5
+# Unprivileged hardening: the daemon only reads packets and runs iptables.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+# Log to the journal; this daemon intentionally keeps no log file of its own
+# (the /var/log situation on this board is already being cleaned up — see
+# docs/system-log-audit-2026-09-17.md).
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

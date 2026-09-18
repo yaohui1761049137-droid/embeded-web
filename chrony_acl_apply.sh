@@ -4,7 +4,7 @@
 # www-data sudoers whitelist (every argument is re-validated here too).
 #
 #   chrony_acl_apply.sh add allow|deny <CIDR>   # runtime (chronyc) + file
-#   chrony_acl_apply.sh remove <CIDR>           # file rewrite + chronyd restart
+#   chrony_acl_apply.sh remove [allow|deny] <CIDR>   # file rewrite + chronyd restart
 #
 # chrony 3.4 facts this is built on (verified against the 3.4 sources):
 #  - `chronyc allow|deny` changes the ACL at run time, effective
@@ -53,9 +53,17 @@ add)
     echo "OK: 已添加 $action $cidr（即时生效，已持久化）"
     ;;
 remove)
-    cidr=$1
+    # 同前缀的 allow 与 deny 可以共存（等前缀长度下 chrony 用 deny），
+    # 所以删除必须能指定动作；不带动作时退回"allow 优先"的旧行为。
+    case "$1" in
+    allow|deny) action=$1; cidr=$2 ;;
+    *)          action=""; cidr=$1 ;;
+    esac
     valid_cidr "$cidr" || die "错误: 无效的 CIDR: $cidr"
-    if grep -qxF "allow $cidr" "$ACL"; then
+    if [ -n "$action" ]; then
+        line="$action $cidr"
+        grep -qxF "$line" "$ACL" || die "错误: 规则不存在: $line"
+    elif grep -qxF "allow $cidr" "$ACL"; then
         line="allow $cidr"
     elif grep -qxF "deny $cidr" "$ACL"; then
         line="deny $cidr"
@@ -69,6 +77,6 @@ remove)
     echo "OK: 已删除 $line（chrony 已重启重载，约 1 分钟重新锁定）"
     ;;
 *)
-    die "用法: $0 add allow|deny <CIDR> | $0 remove <CIDR>"
+    die "用法: $0 add allow|deny <CIDR> | $0 remove [allow|deny] <CIDR>"
     ;;
 esac

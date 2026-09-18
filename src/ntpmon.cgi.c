@@ -61,6 +61,13 @@ static int handle_acl_op(const SessionInfo *session) {
         printf("{\"status\":\"error\",\"message\":\"动作必须是 allow 或 deny\"}");
         return 0;
     }
+    /* remove may carry an action to disambiguate when both actions exist for
+     * the same prefix; when present it must still be well-formed. */
+    if (strcmp(op, "remove") == 0 && action && *action &&
+        strcmp(action, "allow") != 0 && strcmp(action, "deny") != 0) {
+        printf("{\"status\":\"error\",\"message\":\"动作必须是 allow 或 deny\"}");
+        return 0;
+    }
     if (!ntpmon_cidr_valid(cidr)) {
         printf("{\"status\":\"error\",\"message\":\"无效的 CIDR 格式\"}");
         return 0;
@@ -69,7 +76,7 @@ static int handle_acl_op(const SessionInfo *session) {
     /* clear pre-checks against the managed file (helper re-validates) */
     NtpAclRule rules[NTPMON_MAX_RULES];
     int n = ntpmon_acl_load(rules, NTPMON_MAX_RULES);
-    int idx = (n >= 0) ? ntpmon_acl_find(rules, n, cidr) : -1;
+    int idx = (n >= 0) ? ntpmon_acl_find(rules, n, action, cidr) : -1;
     if (strcmp(op, "add") == 0 && idx >= 0) {
         printf("{\"status\":\"error\",\"message\":\"规则已存在\"}");
         return 0;
@@ -78,6 +85,11 @@ static int handle_acl_op(const SessionInfo *session) {
         printf("{\"status\":\"error\",\"message\":\"规则不存在\"}");
         return 0;
     }
+
+    /* A remove without an explicit action still resolves to the matched
+     * rule's action, so the helper never has to guess between two lines. */
+    if (strcmp(op, "remove") == 0 && (!action || !*action) && idx >= 0)
+        action = rules[idx].action;
 
     char err[512], esc[1024];
     if (ntpmon_acl_apply(op, action, cidr, err, sizeof(err)) < 0) {
@@ -91,7 +103,7 @@ static int handle_acl_op(const SessionInfo *session) {
         snprintf(detail, sizeof(detail), "新增 %s %s", action, cidr);
     else
         snprintf(detail, sizeof(detail), "删除 %s %s（chrony 已重启重载）",
-                 (n >= 0 && idx >= 0) ? rules[idx].action : "", cidr);
+                 (action && *action) ? action : "", cidr);
     auth_audit_log(session->user_id, "ntp_acl_change", session->user_id,
                    detail, getenv("REMOTE_ADDR"));
 

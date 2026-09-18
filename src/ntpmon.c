@@ -16,6 +16,7 @@
 #define ACL_FILE_DEFAULT "/etc/chrony/acl-web.conf"
 #define CSV_FILE_DEFAULT "/var/db/ntp_stats.csv"
 #define HELPER_DEFAULT   "/usr/local/bin/chrony_acl_apply.sh"
+#define NIC_FILE_DEFAULT "/var/db/ntp_nic.json"
 
 /* ── paths (env-overridable for host tests) ───────────────────────── */
 
@@ -116,10 +117,14 @@ int ntpmon_acl_load(NtpAclRule *out, int max) {
     return n;
 }
 
-int ntpmon_acl_find(const NtpAclRule *rules, int n, const char *cidr) {
+int ntpmon_acl_find(const NtpAclRule *rules, int n,
+                    const char *action, const char *cidr) {
     int i;
-    for (i = 0; i < n; i++)
-        if (strcmp(rules[i].cidr, cidr) == 0) return i;
+    for (i = 0; i < n; i++) {
+        if (strcmp(rules[i].cidr, cidr) != 0) continue;
+        if (action && *action && strcmp(rules[i].action, action) != 0) continue;
+        return i;
+    }
     return -1;
 }
 
@@ -138,7 +143,9 @@ int ntpmon_acl_apply(const char *op, const char *action, const char *cidr,
         argv[idx++] = (char *)override;
     }
     argv[idx++] = (char *)op;
-    if (strcmp(op, "add") == 0) argv[idx++] = (char *)action;
+    /* add: action is required.  remove: pass it when known so the helper
+     * rewrites the exact "action cidr" line instead of guessing. */
+    if (action && *action) argv[idx++] = (char *)action;
     argv[idx++] = (char *)cidr;
     argv[idx] = NULL;
 
@@ -210,6 +217,68 @@ static size_t jappend(char *out, size_t outlen, size_t pos,
     if (n < 0) return pos;
     if ((size_t)n >= outlen - pos) return outlen;
     return pos + (size_t)n;
+}
+
+/* Per-interface delta windows.  The whole 24 h ring is loaded anyway
+ * (NTPMON_MAX_ROWS = 1441 min), so every offered range is computed from the
+ * same rows — no extra I/O, and the UI can switch without a round trip. */
+#define ETH_WINDOWS 3
+static const long long g_eth_win[ETH_WINDOWS] = { 3600, 18000, 86400 };
+static const char *g_eth_sfx[ETH_WINDOWS]     = { "1h", "5h", "24h" };
+
+/* Counter delta for one interface over the trailing window seconds.
+ * Negative results clamp to 0: the iptables counters start over when the
+ * rules are recreated (device reboot), which reads as a drop mid-window. */
+static long long eth_delta(const NtpMonRow *rows, int nrows, int head,
+                           int nic, long long window_s) {
+    const NtpMonRow *last;
+    long long v;
+    int j, base = 0;
+    if (nrows <= 0) return 0;
+    last = &rows[(head + nrows - 1) % NTPMON_MAX_ROWS];
+    for (j = nrows - 1; j >= 0; j--) {
+        const NtpMonRow *r = &rows[(head + j) % NTPMON_MAX_ROWS];
+        if (last->t - r->t > window_s) break;
+        base = j;
+    }
+    v = last->eth[nic] - rows[(head + base) % NTPMON_MAX_ROWS].eth[nic];
+    return v < 0 ? 0 : v;
+}
+
+/* Embed the per-interface monitor's snapshot as the "nic" key.
+ * Missing/unreadable file degrades to {"ok":false} so the tab can say so. */
+static size_t nic_json_append(char *out, size_t outlen, size_t pos) {
+    static char buf[131072];
+    const char *env = getenv("NTPMON_NIC_FILE");
+    const char *path = (env && *env) ? env : NIC_FILE_DEFAULT;
+    FILE *f = fopen(path, "r");
+    size_t n;
+    char *brace, *ts_p;
+    long long ts = 0, now = (long long)time(NULL);
+
+    /* Every path ends with a trailing comma: the caller appends "meta":{...}
+     * next and that key carries no leading comma of its own. */
+    if (!f)
+        return jappend(out, outlen, pos, "\"nic\":{\"ok\":false},");
+    n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    /* A snapshot larger than the buffer cannot be spliced without producing
+     * invalid JSON — degrade instead of emitting a truncated object. */
+    if (n >= sizeof(buf) - 1)
+        return jappend(out, outlen, pos, "\"nic\":{\"ok\":false,\"too_large\":true},");
+    brace = strchr(buf, '{');
+    if (!brace)
+        return jappend(out, outlen, pos, "\"nic\":{\"ok\":false},");
+    ts_p = strstr(brace, "\"ts\":");
+    if (ts_p) ts = atoll(ts_p + 5);
+
+    pos = jappend(out, outlen, pos, "\"nic\":{\"ok\":true,\"age_s\":%lld,",
+                  ts ? now - ts : -1);
+    /* brace+1 skips the daemon object's own opening brace so the spliced
+     * fields and its remaining body form one object; its closing brace ends it. */
+    pos = jappend(out, outlen, pos, "%s", brace + 1);
+    return jappend(out, outlen, pos, ",");
 }
 
 /* ── stats ────────────────────────────────────────────────────────── */
@@ -337,27 +406,26 @@ int ntpmon_stats_json(char *out, size_t outlen) {
             first = 0;
         }
     }
-    pos = jappend(out, outlen, pos, "],\"last_hour\":[");
+    pos = jappend(out, outlen, pos, "],");
     {
-        int i, first = 1;
-        for (i = 0; i < 4; i++) {
-            long long v = 0;
-            if (nrows) {
-                NtpMonRow *last = &rows[(head + nrows - 1) % NTPMON_MAX_ROWS];
-                int j, base = 0;
-                for (j = nrows - 1; j >= 0; j--) {
-                    NtpMonRow *r = &rows[(head + j) % NTPMON_MAX_ROWS];
-                    if (last->t - r->t > 3600) break;
-                    base = j;
-                }
-                v = last->eth[i] - rows[(head + base) % NTPMON_MAX_ROWS].eth[i];
-                if (v < 0) v = 0;    /* counters reset within the window */
-            }
-            pos = jappend(out, outlen, pos, "%s%lld", first ? "" : ",", v);
-            first = 0;
+        int w, i;
+        for (w = 0; w < ETH_WINDOWS; w++) {
+            pos = jappend(out, outlen, pos, "%s\"last_%s\":[",
+                          w ? "," : "", g_eth_sfx[w]);
+            for (i = 0; i < 4; i++)
+                pos = jappend(out, outlen, pos, "%s%lld", i ? "," : "",
+                              eth_delta(rows, nrows, head, i, g_eth_win[w]));
+            pos = jappend(out, outlen, pos, "]");
         }
     }
-    pos = jappend(out, outlen, pos, "]},");
+    pos = jappend(out, outlen, pos, "},");
+
+    /* ── per-interface serving detail (ntp_nic_monitor daemon) ──
+     * The daemon already writes a complete JSON object to
+     * /var/db/ntp_nic.json, so it is embedded verbatim (with ok/age_s
+     * spliced in) instead of re-parsing it here.  The daemon writes
+     * tmp+rename, so a reader never sees a torn object. */
+    pos = nic_json_append(out, outlen, pos);
 
     /* ── meta ── */
     pos = jappend(out, outlen, pos,
