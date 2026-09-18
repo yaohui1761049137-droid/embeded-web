@@ -1,0 +1,366 @@
+# NTP 网口监控测试 — 原始证据快照
+# 生成时间: 2026-09-17 11:11:05 CST
+# 板子: 192.168.137.100 (LubanCat 2N, aarch64, kernel 4.19.232)
+# 说明: 每段为一个阶段的原始采集输出，KEY=VALUE 便于比对
+
+===================== final_state.txt =====================
+=== 最终状态核验 2026-09-17 11:07:25 ===
+--- 1. iptables 计数规则（应 4 条齐全）---
+# Warning: iptables-legacy tables present, use iptables-legacy to see them
+-A INPUT -i eth3 -p udp -m udp --dport 123 -j ACCEPT
+-A INPUT -i eth2 -p udp -m udp --dport 123 -j ACCEPT
+-A INPUT -i eth1 -p udp -m udp --dport 123 -j ACCEPT
+-A INPUT -i eth0 -p udp -m udp --dport 123 -j ACCEPT
+--- 2. 各口计数 ---
+IPT_eth0=238
+IPT_eth1=225
+IPT_eth2=0
+IPT_eth3=0
+--- 3. ACL 文件（应无测试残留）---
+# Web-managed NTP access rules (chrony allow/deny) - do not edit by hand.
+allow 192.168.137.0/24
+allow 192.168.8.0/24
+allow 192.168.7.0/24
+allow 192.168.1.0/24
+--- 4. chrony 健康 ---
+serverstats: 30,0,38,0,0
+Reference ID    : 50505300 (PPS)
+Stratum         : 1
+Ref time (UTC)  : Thu Sep 17 03:07:20 2026
+#* PPS                           0   2   377     5    +15us[  +17us] +/-   25ms
+--- 5. 采样器 ---
+active
+enabled
+--- 6. CSV ---
+-rw-r--r-- 1 root root 35796 Sep 17 11:07 /var/db/ntp_stats.csv
+-rw-r--r-- 1 root root 34729 Sep 17 10:38 /var/db/ntp_stats.csv.bak.1789612738
+1021 /var/db/ntp_stats.csv
+--- 7. 网口配置未被改动 ---
+eth0             UP             192.168.137.100/24 
+eth1             UP             192.168.1.150/24 
+--- 8. 无遗留的测试用 nmcli profile ---
+Wired connection 1:eth0
+eth1:eth1
+eth2:eth2
+eth3:eth3
+eth2:
+--- 9. 回滚看门狗状态（应无 pending）---
+ls: cannot access '/var/db/rollback.json': No such file or directory
+无 rollback.json（正常）
+
+===================== p2_csv.txt =====================
+CSV_LINES=996
+--- 最近 3 行 (epoch,ntp_hits,ntp_drops,cmd_hits,cmd_drops,log_drops,e0,e1,e2,e3) ---
+1789612861,8,0,479,0,0,128,5,0,0
+1789612920,8,0,492,0,0,128,5,0,0
+1789612980,58,0,534,0,0,178,5,0,0
+--- 采样服务最后一次执行 ---
+ExecMainStartTimestamp=Thu 2026-09-17 10:43:00 CST
+ExecMainStatus=0
+
+===================== p2_post.txt =====================
+T=1789612943
+IPT_eth0=178
+RX_eth0=36721
+IPT_eth1=5
+RX_eth1=956
+IPT_eth2=0
+RX_eth2=0
+IPT_eth3=0
+RX_eth3=0
+SS=58,0,497,0,0
+CSV_LAST=1789612920,8,0,492,0,0,128,5,0,0
+
+===================== p2_pre.txt =====================
+T=1789612939
+IPT_eth0=128
+RX_eth0=36632
+IPT_eth1=5
+RX_eth1=956
+IPT_eth2=0
+RX_eth2=0
+IPT_eth3=0
+RX_eth3=0
+SS=8,0,493,0,0
+CSV_LAST=1789612920,8,0,492,0,0,128,5,0,0
+
+===================== p3_csv.txt =====================
+1789612980,58,0,534,0,0,178,5,0,0
+1789613041,58,0,595,0,0,178,5,0,0
+1789613101,128,0,634,0,0,178,75,0,0
+
+===================== p3_post.txt =====================
+T=1789613047
+IPT_eth0=178
+RX_eth0=36884
+IPT_eth1=75
+RX_eth1=1026
+IPT_eth2=0
+RX_eth2=0
+IPT_eth3=0
+RX_eth3=0
+SS=128,0,606,0,0
+CSV_LAST=1789613041,58,0,595,0,0,178,5,0,0
+
+===================== p3_pre.txt =====================
+T=1789613044
+IPT_eth0=178
+RX_eth0=36858
+IPT_eth1=5
+RX_eth1=956
+IPT_eth2=0
+RX_eth2=0
+IPT_eth3=0
+RX_eth3=0
+SS=58,0,599,0,0
+CSV_LAST=1789613041,58,0,595,0,0,178,5,0,0
+
+===================== p4_csv.txt =====================
+1789613041,58,0,595,0,0,178,5,0,0
+1789613101,128,0,634,0,0,178,75,0,0
+1789613161,228,0,640,0,0,228,125,0,0
+
+===================== p4_post.txt =====================
+T=1789613155
+IPT_eth0=228
+RX_eth0=37111
+IPT_eth1=125
+RX_eth1=1078
+IPT_eth2=0
+RX_eth2=0
+IPT_eth3=0
+RX_eth3=0
+SS=228,0,639,0,0
+CSV_LAST=1789613101,128,0,634,0,0,178,75,0,0
+
+===================== p4_pre.txt =====================
+T=1789613151
+IPT_eth0=178
+RX_eth0=37017
+IPT_eth1=75
+RX_eth1=1028
+IPT_eth2=0
+RX_eth2=0
+IPT_eth3=0
+RX_eth3=0
+SS=128,0,638,0,0
+CSV_LAST=1789613101,128,0,634,0,0,178,75,0,0
+
+===================== p4_side_a.txt =====================
+SENT 50 bytes=2400 from 192.168.137.11 to 192.168.137.100:123
+
+===================== p4_side_b.txt =====================
+SENT 50 bytes=2400 from 192.168.1.121 to 192.168.1.150:123
+
+===================== p5_acl_after.txt =====================
+accheck 192.168.1.121 : 209 Access denied
+accheck 192.168.1.122 : 208 Access allowed
+ACL_FILE:
+# Web-managed NTP access rules (chrony allow/deny) - do not edit by hand.
+allow 192.168.137.0/24
+allow 192.168.8.0/24
+allow 192.168.7.0/24
+allow 192.168.1.0/24
+deny 192.168.1.121/32
+chronyd 启动时间: ActiveEnterTimestamp=Thu 2026-09-17 10:07:13 CST
+
+===================== p5_acl_before.txt =====================
+accheck 192.168.1.121 : 208 Access allowed
+SS=228,0,646,0,0
+ACL_FILE:
+# Web-managed NTP access rules (chrony allow/deny) - do not edit by hand.
+allow 192.168.137.0/24
+allow 192.168.8.0/24
+allow 192.168.7.0/24
+allow 192.168.1.0/24
+
+===================== p5_add_resp.txt =====================
+{"status":"ok","message":"规则已添加并即时生效"}
+
+===================== p5_csv.txt =====================
+1789613161,228,0,640,0,0,228,125,0,0
+1789613221,228,0,644,0,0,228,125,0,0
+1789613280,228,0,655,0,0,228,195,0,0
+
+===================== p5_post.txt =====================
+T=1789613265
+IPT_eth0=228
+RX_eth0=37283
+IPT_eth1=195
+RX_eth1=1150
+IPT_eth2=0
+RX_eth2=0
+IPT_eth3=0
+RX_eth3=0
+SS=228,0,654,0,0
+CSV_LAST=1789613221,228,0,644,0,0,228,125,0,0
+
+===================== p5_pre.txt =====================
+T=1789613262
+IPT_eth0=228
+RX_eth0=37260
+IPT_eth1=125
+RX_eth1=1080
+IPT_eth2=0
+RX_eth2=0
+IPT_eth3=0
+RX_eth3=0
+SS=228,0,653,0,0
+CSV_LAST=1789613221,228,0,644,0,0,228,125,0,0
+
+===================== p7_csv.txt =====================
+--- 最近 5 行 ---
+1789613880,228,0,788,0,0,228,195,0,0
+1789613941,228,0,798,0,0,228,195,0,0
+1789614000,228,0,802,0,0,228,195,0,0
+1789614060,0,0,5,0,0,228,195,0,0
+1789614121,0,0,9,0,0,228,195,0,0
+
+===================== p7_post.txt =====================
+SS=0,0,1,0,0
+chronyd 启动: Thu 2026-09-17 11:00:47 CST
+chronyd active: active
+accheck 192.168.1.121 : 208 Access allowed
+PPS 源: #? PPS                           0   2     3     5    +14us[  +14us] +/-   25ms
+IPT_eth0=228
+IPT_eth1=195
+IPT_eth2=0
+IPT_eth3=0
+ACL_FILE:
+# Web-managed NTP access rules (chrony allow/deny) - do not edit by hand.
+allow 192.168.137.0/24
+allow 192.168.8.0/24
+allow 192.168.7.0/24
+allow 192.168.1.0/24
+
+===================== p7_pre.txt =====================
+SS=228,0,806,0,0
+chronyd 启动: Thu 2026-09-17 10:07:13 CST
+accheck 192.168.1.121 : 209 Access denied
+IPT_eth0=228
+IPT_eth1=195
+IPT_eth2=0
+IPT_eth3=0
+CSV_LAST=1789614000,228,0,802,0,0,228,195,0,0
+
+===================== p7_remove_resp.txt =====================
+{"status":"ok","message":"规则已删除（chrony 已重启）"}
+
+===================== p7b_csv.txt =====================
+1789614000,228,0,802,0,0,228,195,0,0
+1789614060,0,0,5,0,0,228,195,0,0
+1789614121,0,0,9,0,0,228,195,0,0
+1789614180,30,0,15,0,0,228,225,0,0
+
+===================== p7b_post.txt =====================
+T=1789614170
+IPT_eth0=228
+RX_eth0=37977
+IPT_eth1=225
+RX_eth1=1723
+IPT_eth2=0
+RX_eth2=0
+IPT_eth3=0
+RX_eth3=0
+SS=30,0,14,0,0
+CSV_LAST=1789614121,0,0,9,0,0,228,195,0,0
+
+===================== p7b_pre.txt =====================
+T=1789614166
+IPT_eth0=228
+RX_eth0=37952
+IPT_eth1=195
+RX_eth1=1693
+IPT_eth2=0
+RX_eth2=0
+IPT_eth3=0
+RX_eth3=0
+SS=0,0,13,0,0
+CSV_LAST=1789614121,0,0,9,0,0,228,195,0,0
+
+===================== p8_delete.txt =====================
+已删除 eth2 规则
+已删除 eth3 规则
+--- 剩余规则 ---
+# Warning: iptables-legacy tables present, use iptables-legacy to see them
+-A INPUT -i eth1 -p udp -m udp --dport 123 -j ACCEPT
+-A INPUT -i eth0 -p udp -m udp --dport 123 -j ACCEPT
+--- 采样器会读到什么 ---
+IPT_eth0=228
+IPT_eth1=225
+IPT_eth2=MISSING
+IPT_eth3=MISSING
+
+===================== p8_heal.txt =====================
+采样器退出码: 0
+CSV 行数: 1018 -> 1019
+--- 重建后的规则 ---
+# Warning: iptables-legacy tables present, use iptables-legacy to see them
+-A INPUT -i eth3 -p udp -m udp --dport 123 -j ACCEPT
+-A INPUT -i eth2 -p udp -m udp --dport 123 -j ACCEPT
+-A INPUT -i eth1 -p udp -m udp --dport 123 -j ACCEPT
+-A INPUT -i eth0 -p udp -m udp --dport 123 -j ACCEPT
+--- 采样器读到的计数 ---
+IPT_eth0=228
+IPT_eth1=225
+IPT_eth2=0
+IPT_eth3=0
+--- 新写入的 CSV 行 ---
+1789614303,30,0,24,0,0,228,225,0,0
+
+===================== p8_pre.txt =====================
+# Warning: iptables-legacy tables present, use iptables-legacy to see them
+计数规则条数: 4
+# Warning: iptables-legacy tables present, use iptables-legacy to see them
+-A INPUT -i eth3 -p udp -m udp --dport 123 -j ACCEPT
+-A INPUT -i eth2 -p udp -m udp --dport 123 -j ACCEPT
+-A INPUT -i eth1 -p udp -m udp --dport 123 -j ACCEPT
+-A INPUT -i eth0 -p udp -m udp --dport 123 -j ACCEPT
+
+===================== p8b_post.txt =====================
+T=1789614351
+IPT_eth0=238
+RX_eth0=38222
+IPT_eth1=225
+RX_eth1=1725
+IPT_eth2=0
+RX_eth2=0
+IPT_eth3=0
+RX_eth3=0
+SS=30,0,29,0,0
+CSV_LAST=1789614303,30,0,24,0,0,228,225,0,0
+
+===================== p8b_pre.txt =====================
+T=1789614347
+IPT_eth0=228
+RX_eth0=38188
+IPT_eth1=225
+RX_eth1=1725
+IPT_eth2=0
+RX_eth2=0
+IPT_eth3=0
+RX_eth3=0
+SS=30,0,28,0,0
+CSV_LAST=1789614303,30,0,24,0,0,228,225,0,0
+
+===================== frontend_check.json =====================
+{"steps": [{"name": "API stats status ok", "ok": true, "detail": ""}, {"name": "登录页已加载", "ok": true, "detail": "Login"}, {"name": "登录成功并进入控制面板", "ok": true, "detail": "https://127.0.0.1:8443/cgi-bin/main.cgi"}, {"name": "柱状图 data[1] == API eth.total", "ok": true, "detail": "browser=[238, 225, 0, 0] api=[238, 225, 0, 0]"}, {"name": "柱状图网口标签 == eth0..eth3", "ok": true, "detail": "['eth0', 'eth1', 'eth2', 'eth3']"}, {"name": "数字卡已填充（非占位符）", "ok": true, "detail": "{\"cur\": \"0条/分\", \"hour\": \"257\", \"peak\": \"138\", \"tot\": \"30\"}"}, {"name": "ACL 表格内容 == API 规则", "ok": true, "detail": "table=[('allow', '192.168.137.0/24'), ('allow', '192.168.8.0/24'), ('allow', '192.168.7.0/24'), ('allow', '192.168.1.0/24')] api=[('allow', '192.168.137.0/24'), ('allow', '192.168.8.0/24'), ('allow', '192.168.7.0/24'), ('allow', '192.168.1.0/24')]"}, {"name": "折线累计值(reqCum) == API ntp_hits", "ok": true, "detail": "browser=30 api=30"}, {"name": "折线末点速率 == API series.m 末值", "ok": true, "detail": "browser=0 api=0"}, {"name": "折线图存在 null 断点（chrony 重启归零处）", "ok": true, "detail": "null 个数=4"}, {"name": "悬停 eth1 柱子出现 tooltip", "ok": true, "detail": "'eth1\\n累计 225 条\\n近1h +225'"}, {"name": "tooltip 包含累计与近1h读数", "ok": true, "detail": "'eth1\\n累计 225 条\\n近1h +225'"}], "ok": true, "tooltip": "eth1\n累计 225 条\n近1h +225", "cards": {"cur": "0条/分", "hour": "257", "peak": "138", "tot": "30"}, "bar_values": [238, 225, 0, 0]}
+
+===================== p2_stats.json =====================
+{"status": "ok", "acl": {"ok": true, "rules": [{"action": "allow", "cidr": "192.168.137.0/24"}, {"action": "allow", "cidr": "192.168.8.0/24"}, {"action": "allow", "cidr": "192.168.7.0/24"}, {"action": "allow", "cidr": "192.168.1.0/24"}], "file_mtime": "2026-09-17 10:07:25"}, "eth": {"names": ["eth0", "eth1", "eth2", "eth3"], "total": [178, 5, 0, 0], "last_hour": [53, 5, 0, 0]}, "meta": {"csv_ok": true, "csv_ts": 1789612980, "csv_age_s": 46, "samples": 996}, "series": {"points": 996, "t_last": 1789612980, "m_tail": [0, 0, 7, 0, 0, 0, 0, 50], "c_tail": [0, 0, 8, 8, 8, 8, 8, 58]}}
+
+===================== p3_stats.json =====================
+{"status": "ok", "acl": {"ok": true, "rules": [{"action": "allow", "cidr": "192.168.137.0/24"}, {"action": "allow", "cidr": "192.168.8.0/24"}, {"action": "allow", "cidr": "192.168.7.0/24"}, {"action": "allow", "cidr": "192.168.1.0/24"}], "file_mtime": "2026-09-17 10:07:25"}, "eth": {"names": ["eth0", "eth1", "eth2", "eth3"], "total": [178, 75, 0, 0], "last_hour": [53, 75, 0, 0]}, "meta": {"csv_ok": true, "csv_ts": 1789613101, "csv_age_s": 27, "samples": 998}, "series": {"points": 998, "t_last": 1789613101, "m_tail": [7, 0, 0, 0, 0, 50, 0, 70], "c_tail": [8, 8, 8, 8, 8, 58, 58, 128]}}
+
+===================== p4_stats.json =====================
+{"status": "ok", "acl": {"ok": true, "rules": [{"action": "allow", "cidr": "192.168.137.0/24"}, {"action": "allow", "cidr": "192.168.8.0/24"}, {"action": "allow", "cidr": "192.168.7.0/24"}, {"action": "allow", "cidr": "192.168.1.0/24"}], "file_mtime": "2026-09-17 10:07:25"}, "eth": {"names": ["eth0", "eth1", "eth2", "eth3"], "total": [228, 125, 0, 0], "last_hour": [103, 125, 0, 0]}, "meta": {"csv_ok": true, "csv_ts": 1789613161, "csv_age_s": 43, "samples": 999}, "series": {"points": 999, "t_last": 1789613161, "m_tail": [0, 0, 0, 0, 50, 0, 70, 100], "c_tail": [8, 8, 8, 8, 58, 58, 128, 228]}}
+
+===================== p5_stats.json =====================
+{"status": "ok", "acl": {"ok": true, "rules": [{"action": "allow", "cidr": "192.168.137.0/24"}, {"action": "allow", "cidr": "192.168.8.0/24"}, {"action": "allow", "cidr": "192.168.7.0/24"}, {"action": "allow", "cidr": "192.168.1.0/24"}, {"action": "deny", "cidr": "192.168.1.121/32"}], "file_mtime": "2026-09-17 10:47:27"}, "eth": {"names": ["eth0", "eth1", "eth2", "eth3"], "total": [228, 195, 0, 0], "last_hour": [103, 195, 0, 0]}, "meta": {"csv_ok": true, "csv_ts": 1789613280, "csv_age_s": 58, "samples": 1001}, "series": {"points": 1001, "t_last": 1789613280, "m_tail": [0, 0, 50, 0, 70, 100, 0, 0], "c_tail": [8, 8, 58, 58, 128, 228, 228, 228]}}
+
+===================== p7_stats.json =====================
+{"status": "ok", "acl": {"ok": true, "rules": [{"action": "allow", "cidr": "192.168.137.0/24"}, {"action": "allow", "cidr": "192.168.8.0/24"}, {"action": "allow", "cidr": "192.168.7.0/24"}, {"action": "allow", "cidr": "192.168.1.0/24"}], "file_mtime": "2026-09-17 11:00:47"}, "eth": {"names": ["eth0", "eth1", "eth2", "eth3"], "total": [228, 195, 0, 0], "last_hour": [103, 195, 0, 0]}, "meta": {"csv_ok": true, "csv_ts": 1789614121, "csv_age_s": 13, "samples": 1015}, "series": {"points": 1015, "t_last": 1789614121, "m_tail": [0, 0, 0, 0, 0, 0, -1, 0], "c_tail": [228, 228, 228, 228, 228, 228, 0, 0]}}
+
+===================== p7b_stats.json =====================
+{"status": "ok", "acl": {"ok": true, "rules": [{"action": "allow", "cidr": "192.168.137.0/24"}, {"action": "allow", "cidr": "192.168.8.0/24"}, {"action": "allow", "cidr": "192.168.7.0/24"}, {"action": "allow", "cidr": "192.168.1.0/24"}], "file_mtime": "2026-09-17 11:00:47"}, "eth": {"names": ["eth0", "eth1", "eth2", "eth3"], "total": [228, 225, 0, 0], "last_hour": [103, 225, 0, 0]}, "meta": {"csv_ok": true, "csv_ts": 1789614180, "csv_age_s": 43, "samples": 1016}, "series": {"points": 1016, "t_last": 1789614180, "m_tail": [0, 0, 0, 0, 0, -1, 0, 30], "c_tail": [228, 228, 228, 228, 228, 0, 0, 30]}}
+

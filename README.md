@@ -25,9 +25,56 @@
   即时生效、删除重启重载；CIDR 双重校验 + CSRF，操作入审计）
 - **NTP 流量监控**（近 24h 请求量趋势 + 四网口请求量柱状图；chronyc serverstats 与 iptables
   每网口计数每分钟采样落盘；uPlot 渲染，悬停读数 + 摘要数字卡）
+- **逐网口授时监测**（`ntp-nic-monitor.service`：AF_PACKET 抓入向请求给出每口**客户端明细**，
+  iptables OUTPUT 计数给出每口**应答量与应答率**；快照 `/var/db/ntp_nic.json` 每 5 秒原子更新，
+  前端「各网口授时服务状态」+「客户端明细」两块面板）
+- **系统日志查看**（root 专属 Tab：pps_tod 当日日志 / pps_tod 看门狗 / lighttpd
+  access·error 四类来源，行数与关键字过滤；`log.cgi` 用固定 id→路径白名单，只读文件尾部 256KB）
 - **业务审计日志**（网络配置修改、接收机模式切换、NTP 黑白名单变更自动记录操作者和时间到 `audit_log` 表）
 - **SQLite 存储**（WAL 模式，多进程 CGI 并发安全）
-- **120 项自动化测试**（`test_gate.sh`，宿主机离线全绿，含 NMCLI_OVERRIDE / CHRONYC_OVERRIDE / NTPMON_HELPER_OVERRIDE 假命令）
+- **171 项自动化测试**（`test_gate.sh`，宿主机离线全绿，含 NMCLI_OVERRIDE / CHRONYC_OVERRIDE / NTPMON_HELPER_OVERRIDE / LOGVIEW_ROOT / NTPMON_NIC_FILE 假命令与假数据）
+- **逐网口端到端测试**（`test_ntp_nic.sh`，真实注入 + 物理收包计数交叉验证，25 项）
+
+## 四项需求现状
+
+> 2026-09-17 · 完整方案、验证记录与遗留边界见 [`docs/requirements-summary-2026-09-17.md`](docs/requirements-summary-2026-09-17.md)
+
+| # | 需求 | 现状 |
+|---|---|---|
+| 1 | 确认 system 日志功能正常 | ✅ 查看功能已实现 · ⚠️ 板端日志治理部分完成 |
+| 2 | 每个授时网口的授时监测 | ✅ 已实现，压测验证通过 |
+| 3 | chrony 黑白名单：Web 还是 console | ✅ Web 为受管路径（含同网段 allow/deny 共存） |
+| 4 | TOD 时码比对 + 连续异常重置 | ⚠️ 已实现并故障注入验证，存在设计固有的 ±0.5s 绝对相位限制 |
+
+**① 系统日志** —— 新增 root 专属「系统日志」Tab（`src/log.cgi.c`）：固定 id→路径白名单
+（穿越在结构上不可能）、只读文件尾部 256KB、行数与关键字过滤。
+核验发现板端 `/var/log` 曾积压 **694 MB**：hostapd 因缺配置文件每 2 秒失败刷屏（约 10 MB/天，
+占 `daemon.log` 行数 56.8%），叠加无 RTC 电池导致时钟跳变、logrotate 日期记账失真而从不轮转。
+已停用 hostapd、规范轮转并压缩归档，降至 **83 MB**；RTC 每 6h 持久化由从未执行的
+`/etc/cron.d` 条目改为 systemd timer。
+
+**② 逐网口授时监测** —— 新增常驻采集进程 `ntp-nic-monitor.service`。
+实测确认这块板子的 **AF_PACKET 看不到出向包**（注入 9 包、chronyd 实发 9 包、userspace 见 0），
+因此走两条路：**入向用 AF_PACKET 抓客户端身份，出向用 iptables OUTPUT 计数得应答率**。
+前端新增「各网口授时服务状态」「客户端明细」两块面板，并加**页级时间范围开关**
+（近 1h / 5h / 24h，控件用连体矩形以区别于网口的圆胶囊）。
+压测 **10k/s 每口、双口并发 20k/s：100% 送达、100% 应答、零串扰**；
+监控链路在 20k pps 下与内核计数**逐包相等**；实测上限约 **34,500 请求/秒**（chronyd 单线程收包）。
+
+**③ chrony 黑白名单** —— 结论是 **Web 为受管路径，console 仅应急**：
+Web（root + CSRF）走 `chronyc allow|deny` 即时生效 + 持久化 + 审计；删除改文件 + 重启重载。
+console 手工 `chronyc` 的规则**不持久、不入审计、Web 表格看不到也删不掉**，边界已写入
+[`docs/ntp-monitor.md`](docs/ntp-monitor.md) §2.1。本轮另补齐 **同网段 allow 与 deny 共存**
+（chrony 按最长前缀匹配、等前缀下 deny 优先）：翻转网段放行状态不再需要"先删后加"
+（删除会重启 chronyd、清零请求计数并重锁 PPS 约 1 分钟），UI 两行各自携带动作、不会误删。
+
+**④ TOD 时码比对** —— 修复四处缺口：**锚点序列仲裁**（锚的秒值连续递增 ≥3 次才允许写钟，
+源跳变时不写）、**死区自愈**（0.5~1.0s 区间原先既不进 SHM 也不被纠正，现连续门控 ≥10 次强制步进）、
+**小时配额**（超限转 `CAPPED` 停止写钟，防错误参考把时钟来回拖）、注释与实现对齐。
+故障注入 4 项验证通过（0.7s 死区自愈 / 1.5s 快速通道 / 配额闸 / 正常态回归）。
+**遗留限制**：`S_round = round(边沿本地时间)` 使亚秒相位误差对系统不可见，
+绝对精度存在约 **±0.5s** 的锁定不确定性（**先于本轮存在**）；
+此精度指"与 TOD 源整秒一致"，chrony 自述的 µs 级是**内部自洽口径**，不等于绝对 UTC 精度。
 
 ## 架构
 
@@ -194,7 +241,7 @@ ssh root@<board> '
   for src in login.cgi.c logout.cgi.c main.cgi.c network.cgi.c \
              user_list.cgi.c user_create.cgi.c user_passwd.cgi.c \
              user_toggle.cgi.c user_delete.cgi.c user_change_pass.cgi.c \
-             timesync.cgi.c ntpmon.cgi.c; do
+             timesync.cgi.c ntpmon.cgi.c log.cgi.c; do
     name=$(echo $src | sed "s/\.cgi\.c//" | sed "s/\.c//").cgi
     gcc -Wall -O2 -o $name $src common.c auth.c gate.c users.c nmcli.c timesync.c ntpmon.c sha256.c sqlite3.o -lpthread -ldl
   done
@@ -230,6 +277,10 @@ EOF
   chmod 755 /usr/local/bin/chrony_acl_apply.sh /usr/local/bin/ntp_stats_sample.sh
   cp ntp-stats.service ntp-stats.timer /etc/systemd/system/
   systemctl enable --now ntp-stats.timer
+  #     逐网口授时监测（客户端明细 + 应答率；AF_PACKET + iptables OUTPUT）
+  gcc -O2 -Wall -o /usr/local/bin/ntp_nic_monitor ntp_nic_monitor.c
+  cp ntp-nic-monitor.service /etc/systemd/system/
+  systemctl daemon-reload && systemctl enable --now ntp-nic-monitor
   #     chrony ACL 托管文件 + include（一次性；随后重启 chrony 激活）
   #     现有生效的 allow/deny 行迁入 acl-web.conf（行为不变）
   printf "# Web-managed NTP access rules (chrony allow/deny) - do not edit by hand.\nallow 192.168.137.0/24\n" > /etc/chrony/acl-web.conf
@@ -353,6 +404,18 @@ UT986 接收机 ── 1PPS 秒脉冲 ─▶ GPIO3_A5 ─(gpiochip 边沿事件,
 ./test_suite.sh <board_ip>
 ```
 
+逐网口 NTP 流量监控测试（需板子两条网口各有真实对端设备，见 `docs/ntp-nic-test-report-2026-09-17.md`）：
+
+```bash
+./test_ntp_nic.sh                 # 自动选传输层；本地不可达时经 Windows 转发
+./test_ntp_nic.sh --quick         # 跳过 70 秒静默基线观察
+```
+
+> 计数规则挂在 INPUT 链，所以只有从外部经该物理网口进来的 UDP/123 才计入该口——
+> 脚本先用物理收包计数做归属探针，不成立即终止；再逐层断言
+> iptables → CSV → `ntpmon.cgi` JSON 的数值一致性。脚本只做注入与断言，
+> 不改网口配置、不重启 chrony、不动 ACL 规则。
+
 > 门卫模块（gate.c）读取 `DB_PATH` 环境变量覆盖数据库路径（默认 `/var/db/myapp.db`），
 > 使 CGI 二进制可在宿主机以受控环境变量离线运行——`test_gate.sh` 依赖此特性。
 > 同理，nmcli 调用读取 `NMCLI_OVERRIDE` 覆盖可执行文件、`NMCLI_NO_SUDO=1` 去掉 sudo，
@@ -375,7 +438,7 @@ UT986 接收机 ── 1PPS 秒脉冲 ─▶ GPIO3_A5 ─(gpiochip 边沿事件,
 | 权限 | root/admin 角色分离，root 保护（不可自删/不可禁最后一个 root） |
 | 系统命令 | nmcli 经 www-data sudoers NOPASSWD 白名单放行；参数先白名单/格式双重校验，fork/execvp 无 shell |
 | 串口控制 | timesync.cgi 仅向 /dev/ttyS7 写固定字节载荷（5 种 UT986 模式 × 固定校验和），枚举白名单 + CSRF；写入经 dialout 组授权，不读串口（避免抢走 pps_tod 的 NMEA） |
-| NTP 访问控制 | ntpmon.cgi 改 ACL 限 root（角色门）+ CSRF；CIDR 在 CGI 与 root 助手内双重校验，助手经 sudoers NOPASSWD 白名单调用（步骤 3c）；新增走 chronyc 运行时 ACL（即时生效），删除重启 chrony 重载；全部入审计 |
+| NTP 访问控制 | ntpmon.cgi 改 ACL 限 root（角色门）+ CSRF；CIDR 在 CGI 与 root 助手内双重校验，助手经 sudoers NOPASSWD 白名单调用（步骤 3c）；新增走 chronyc 运行时 ACL（即时生效），删除重启 chrony 重载；全部入审计。**Web 是唯一受管路径**：console 上手工 `chronyc allow/deny` 的规则不持久、不入审计、Web 表格看不到也删不掉，重启即失——边界与清理方法见 `docs/ntp-monitor.md` §2.1 |
 | 流量采样 | iptables 每网口 udp/123 计数规则为"只计数不拦截"（ACCEPT 与当前默认策略一致）；采样器读取 chronyc 与 iptables 计数写 /var/db/ntp_stats.csv（0644） |
 | 审计 | `audit_log` 表记录所有管理操作 |
 | SQL | 参数化查询（SQLite prepared statements） |

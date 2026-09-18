@@ -1,0 +1,78 @@
+{
+  "steps": [
+    {
+      "name": "API stats status ok",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "登录页已加载",
+      "ok": true,
+      "detail": "Login"
+    },
+    {
+      "name": "登录成功并进入控制面板",
+      "ok": true,
+      "detail": "https://127.0.0.1:8443/cgi-bin/main.cgi"
+    },
+    {
+      "name": "柱状图 data[1] == API eth.total",
+      "ok": true,
+      "detail": "browser=[238, 225, 0, 0] api=[238, 225, 0, 0]"
+    },
+    {
+      "name": "柱状图网口标签 == eth0..eth3",
+      "ok": true,
+      "detail": "['eth0', 'eth1', 'eth2', 'eth3']"
+    },
+    {
+      "name": "数字卡已填充（非占位符）",
+      "ok": true,
+      "detail": "{\"cur\": \"0条/分\", \"hour\": \"257\", \"peak\": \"138\", \"tot\": \"30\"}"
+    },
+    {
+      "name": "ACL 表格内容 == API 规则",
+      "ok": true,
+      "detail": "table=[('allow', '192.168.137.0/24'), ('allow', '192.168.8.0/24'), ('allow', '192.168.7.0/24'), ('allow', '192.168.1.0/24')] api=[('allow', '192.168.137.0/24'), ('allow', '192.168.8.0/24'), ('allow', '192.168.7.0/24'), ('allow', '192.168.1.0/24')]"
+    },
+    {
+      "name": "折线累计值(reqCum) == API ntp_hits",
+      "ok": true,
+      "detail": "browser=30 api=30"
+    },
+    {
+      "name": "折线末点速率 == API series.m 末值",
+      "ok": true,
+      "detail": "browser=0 api=0"
+    },
+    {
+      "name": "折线图存在 null 断点（chrony 重启归零处）",
+      "ok": true,
+      "detail": "null 个数=4"
+    },
+    {
+      "name": "悬停 eth1 柱子出现 tooltip",
+      "ok": true,
+      "detail": "'eth1\\n累计 225 条\\n近1h +225'"
+    },
+    {
+      "name": "tooltip 包含累计与近1h读数",
+      "ok": true,
+      "detail": "'eth1\\n累计 225 条\\n近1h +225'"
+    }
+  ],
+  "ok": true,
+  "tooltip": "eth1\n累计 225 条\n近1h +225",
+  "cards": {
+    "cur": "0条/分",
+    "hour": "257",
+    "peak": "138",
+    "tot": "30"
+  },
+  "bar_values": [
+    238,
+    225,
+    0,
+    0
+  ]
+}
