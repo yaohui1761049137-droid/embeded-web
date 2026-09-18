@@ -2,6 +2,7 @@
 
 > 2026-09-17 · 板卡 LubanCat 2N（192.168.137.100 / 192.168.1.150，RK3568 aarch64，Debian 10，kernel 4.19.232）
 > 本文汇总以下四项需求的判定、实现方案、验证结果与遗留边界。
+> **接手本项目请先读 [`handoff-2026-09-17.md`](handoff-2026-09-17.md)**（环境陷阱、当前状态、待办、验证命令）。
 > 细节文档：`system-log-audit-2026-09-17.md`（日志核验）、`ntp-monitor.md`（NTP 监控设计）、
 > `feature-implementation-report-2026-09-17.md`（实施记录，含五个附录）、`ntp-nic-test-report-2026-09-17.md`（网口流量测试）
 
