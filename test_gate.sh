@@ -36,6 +36,18 @@ assert_contains() {
     fi
 }
 
+assert_not_contains() {
+    local desc="$1" pattern="$2" actual="$3"
+    if echo "$actual" | grep -q "$pattern"; then
+        red "  ❌ $desc (unexpected match: $pattern)"
+        echo "$actual" | head -5 | sed 's/^/     /'
+        FAIL=$((FAIL + 1))
+    else
+        green "  ✅ $desc"
+        PASS=$((PASS + 1))
+    fi
+}
+
 # ── Build host binaries ────────────────────────────────────────────
 mkdir -p "$BIN"
 echo "Compiling (host)…"
@@ -43,7 +55,7 @@ gcc -Wall -O2 -c -DSQLITE_THREADSAFE=0 "$SRC/sqlite3.c" -o "$WORK/sqlite3.o"
 for src in login.cgi.c logout.cgi.c main.cgi.c network.cgi.c \
            user_list.cgi.c user_create.cgi.c user_passwd.cgi.c \
            user_toggle.cgi.c user_delete.cgi.c user_change_pass.cgi.c \
-           timesync.cgi.c ntpmon.cgi.c; do
+           timesync.cgi.c ntpmon.cgi.c log.cgi.c; do
     name=$(echo "$src" | sed 's/\.cgi\.c//').cgi
     gcc -Wall -O2 -o "$BIN/$name" "$SRC/$src" "$SRC/common.c" "$SRC/auth.c" \
         "$SRC/gate.c" "$SRC/users.c" "$SRC/nmcli.c" "$SRC/timesync.c" \
@@ -531,7 +543,9 @@ assert_contains "series t array" '"series":{"t":\[' "$RESP"
 assert_contains "per-minute w/ reset break" '"m":\[-1,12,-1,12\]' "$RESP"
 assert_contains "cumulative raw values" '"c":\[10,22,1,13\]' "$RESP"
 assert_contains "eth totals" '"total":\[3,5,0,0\]' "$RESP"
-assert_contains "eth last hour (reset clamped)" '"last_hour":\[0,5,0,0\]' "$RESP"
+assert_contains "eth 1h delta (reset clamped)" '"last_1h":\[0,5,0,0\]' "$RESP"
+assert_contains "eth 5h delta present" '"last_5h":\[0,5,0,0\]' "$RESP"
+assert_contains "eth 24h delta present" '"last_24h":\[0,5,0,0\]' "$RESP"
 assert_contains "csv flagged ok" '"csv_ok":true' "$RESP"
 
 echo "28b. ntpmon stats: missing CSV degrades gracefully"
@@ -581,21 +595,50 @@ assert_contains "add ok" '"status":"ok"' "$RESP"
 CALLS=$(cat "$FAKE_ACL_STATE/calls.log")
 assert_contains "helper got add args" "add allow 10.20.30.0/24" "$CALLS"
 
-echo "28h. acl_op: duplicate rule rejected before helper"
+echo "28h. acl_op: same CIDR with the OTHER action is allowed (allow+deny coexist)"
+# chrony applies deny at equal prefix length, so flipping a subnet from allow
+# to deny must not require deleting the allow first (which restarts chronyd).
 BODY="op=add&action=deny&cidr=192.168.137.0/24&csrf_token=$CSRF_VAL"
 RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
        QUERY_STRING="action=acl_op" REQUEST_METHOD=POST \
        CONTENT_LENGTH=${#BODY} "$BIN/ntpmon.cgi")
-assert_contains "already exists" "规则已存在" "$RESP"
+assert_contains "different action accepted" '"status":"ok"' "$RESP"
+CALLS=$(cat "$FAKE_ACL_STATE/calls.log")
+assert_contains "helper got add deny" "add deny 192.168.137.0/24" "$CALLS"
 
-echo "28i. acl_op: root remove → helper invoked"
+echo "28h2. acl_op: exact duplicate (same action + CIDR) still rejected"
+BODY="op=add&action=allow&cidr=192.168.137.0/24&csrf_token=$CSRF_VAL"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       QUERY_STRING="action=acl_op" REQUEST_METHOD=POST \
+       CONTENT_LENGTH=${#BODY} "$BIN/ntpmon.cgi")
+assert_contains "duplicate rejected" "规则已存在" "$RESP"
+
+echo "28i. acl_op: root remove → helper gets the resolved action"
 BODY="op=remove&cidr=192.168.137.0/24&csrf_token=$CSRF_VAL"
 RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
        QUERY_STRING="action=acl_op" REQUEST_METHOD=POST \
        CONTENT_LENGTH=${#BODY} "$BIN/ntpmon.cgi")
 assert_contains "remove ok" '"status":"ok"' "$RESP"
 CALLS=$(cat "$FAKE_ACL_STATE/calls.log")
-assert_contains "helper got remove args" "remove 192.168.137.0/24" "$CALLS"
+assert_contains "helper got remove + action" "remove allow 192.168.137.0/24" "$CALLS"
+
+echo "28i2. acl_op: remove's action is part of the identity (deny not present)"
+# Only `allow 192.168.137.0/24` exists, so asking to remove the DENY for the
+# same prefix must not silently remove the allow.
+BODY="op=remove&action=deny&cidr=192.168.137.0/24&csrf_token=$CSRF_VAL"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       QUERY_STRING="action=acl_op" REQUEST_METHOD=POST \
+       CONTENT_LENGTH=${#BODY} "$BIN/ntpmon.cgi")
+assert_contains "wrong action not silently matched" "规则不存在" "$RESP"
+CALLS=$(cat "$FAKE_ACL_STATE/calls.log")
+assert_not_contains "helper NOT called for the wrong action" "remove deny 192.168.137.0/24" "$CALLS"
+
+echo "28i3. acl_op: remove with a bogus action rejected"
+BODY="op=remove&action=maybe&cidr=192.168.137.0/24&csrf_token=$CSRF_VAL"
+RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       QUERY_STRING="action=acl_op" REQUEST_METHOD=POST \
+       CONTENT_LENGTH=${#BODY} "$BIN/ntpmon.cgi")
+assert_contains "bad remove action rejected" "动作必须是 allow 或 deny" "$RESP"
 
 echo "28j. acl_op: removing a nonexistent rule rejected"
 BODY="op=remove&cidr=172.16.0.0/12&csrf_token=$CSRF_VAL"
@@ -610,6 +653,173 @@ RESP=$(printf '%s' "$BODY" | DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" FAKE_ACL_FA
        QUERY_STRING="action=acl_op" REQUEST_METHOD=POST \
        CONTENT_LENGTH=${#BODY} "$BIN/ntpmon.cgi")
 assert_contains "helper error surfaced" "模拟失败" "$RESP"
+
+# ── Test 29-29h: log.cgi — system log viewer (offline) ──────────────
+# LOGVIEW_ROOT points the id→path whitelist at a scratch tree so the CGI
+# runs without touching /var/log.
+LOGVIEW_ROOT="$WORK/logroot"
+export LOGVIEW_ROOT
+mkdir -p "$LOGVIEW_ROOT/pps_tod" "$LOGVIEW_ROOT/lighttpd"
+TODAY=$(date +%Y-%m-%d)
+for i in $(seq 1 300); do echo "line-$i"; done > "$LOGVIEW_ROOT/pps_tod/pps_tod_$TODAY.log"
+echo "EVENT_MARKER bootstrap" >> "$LOGVIEW_ROOT/pps_tod/pps_tod_$TODAY.log"
+printf 'wd-a\nwd-b\n' > "$LOGVIEW_ROOT/pps_tod/watchdog.log"
+: > "$LOGVIEW_ROOT/lighttpd/error.log"
+# access.log intentionally absent → the "missing file" branch
+# a file bigger than the 256 KB tail window, marker only at the start
+python3 - "$LOGVIEW_ROOT/lighttpd/access.log" <<'PY'
+import sys
+with open(sys.argv[1], "w") as f:
+    f.write("HEAD_MARKER_ONLY_AT_TOP\n")
+    for i in range(20000):
+        f.write("padding line %05d aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n" % i)
+    f.write("TAIL_MARKER_AT_BOTTOM\n")
+PY
+
+echo "29. log.cgi sources: whitelist metadata + dated filename"
+RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       QUERY_STRING="action=sources" "$BIN/log.cgi")
+assert_contains "status ok" '"status":"ok"' "$RESP"
+assert_contains "pps_tod listed" '"id":"pps_tod"' "$RESP"
+assert_contains "dated filename built" "pps_tod_$TODAY.log" "$RESP"
+assert_contains "existing file has size" '"exists":true' "$RESP"
+assert_contains "file size reported" '"size":1120046' "$RESP"
+
+echo "29b. log.cgi tail: newest N lines, truncation flagged"
+RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       QUERY_STRING="action=tail&id=pps_tod&lines=3" "$BIN/log.cgi")
+assert_contains "marker line returned" 'EVENT_MARKER bootstrap' "$RESP"
+assert_contains "third-from-last returned" 'line-299' "$RESP"
+assert_not_contains "fourth-from-last dropped" 'line-298' "$RESP"
+assert_contains "returned=3" '"returned":3' "$RESP"
+assert_contains "truncated flagged" '"truncated":true' "$RESP"
+assert_contains "matched counted" '"matched":301' "$RESP"
+
+echo "29c. log.cgi tail: grep filters before the line cap"
+RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       QUERY_STRING="action=tail&id=pps_tod&lines=10&grep=EVENT_MARKER" "$BIN/log.cgi")
+assert_contains "filtered line returned" 'EVENT_MARKER bootstrap' "$RESP"
+assert_contains "matched=1" '"matched":1' "$RESP"
+assert_contains "returned=1" '"returned":1' "$RESP"
+assert_not_contains "non-matching lines dropped" 'line-300' "$RESP"
+
+echo "29d. log.cgi tail: lines clamped to >=1"
+RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       QUERY_STRING="action=tail&id=pps_tod&lines=0" "$BIN/log.cgi")
+assert_contains "clamped to one line" '"returned":1' "$RESP"
+
+echo "29e. log.cgi tail: only the tail window is read"
+RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       QUERY_STRING="action=tail&id=lighttpd_acc&lines=5" "$BIN/log.cgi")
+assert_contains "bottom marker reached" 'TAIL_MARKER_AT_BOTTOM' "$RESP"
+assert_contains "window flag set" '"windowed":true' "$RESP"
+assert_contains "file size reported" '"exists":true' "$RESP"
+assert_not_contains "top of a >256KB file not read" 'HEAD_MARKER_ONLY_AT_TOP' "$RESP"
+
+echo "29f. log.cgi tail: missing file degrades gracefully"
+rm -f "$LOGVIEW_ROOT/lighttpd/access.log"
+RESP_MISSING=$(DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       QUERY_STRING="action=tail&id=lighttpd_acc&lines=5" "$BIN/log.cgi")
+assert_contains "missing file: still ok" '"status":"ok"' "$RESP_MISSING"
+assert_contains "missing file: exists=false" '"exists":false' "$RESP_MISSING"
+assert_contains "missing file: empty list" '"lines":\[\]' "$RESP_MISSING"
+
+echo "29g. log.cgi: unknown id / path traversal rejected"
+RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       QUERY_STRING="action=tail&id=../../etc/passwd" "$BIN/log.cgi")
+assert_contains "traversal rejected" "未知的日志源" "$RESP"
+assert_not_contains "no file content leaked" 'root:' "$RESP"
+RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       QUERY_STRING="action=tail&id=nginx" "$BIN/log.cgi")
+assert_contains "unknown id rejected" "未知的日志源" "$RESP"
+RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" \
+       QUERY_STRING="action=bogus" "$BIN/log.cgi")
+assert_contains "bad action rejected" "无效的 action" "$RESP"
+
+echo "29h. log.cgi: admin forbidden (root-only)"
+BODY="user=testadmin2&pass=Recovered1!"
+RESP_A=$(printf '%s' "$BODY" | DB_PATH="$DB" REQUEST_METHOD=POST \
+         CONTENT_LENGTH=${#BODY} REMOTE_ADDR=127.0.0.1 "$BIN/login.cgi")
+A_SID=$(echo "$RESP_A" | grep -o "session_id=[^;]*" | head -1)
+A_CSRF=$(echo "$RESP_A" | grep -o "csrf_token=[^;]*" | head -1)
+RESP=$(DB_PATH="$DB" HTTP_COOKIE="$A_SID; $A_CSRF" \
+       QUERY_STRING="action=sources" "$BIN/log.cgi")
+assert_contains "Forbidden for admin" "Forbidden" "$RESP"
+assert_not_contains "no source list leaked to admin" '"sources"' "$RESP"
+
+# ── Test 30-30d: ntpmon nic block — per-interface serving detail ────
+# The daemon's snapshot is embedded verbatim, so the whole stats response
+# must still be valid JSON — that is the assertion that matters most.
+NIC_FILE="$WORK/ntp_nic.json"
+NOW=$(date +%s)
+cat > "$NIC_FILE" <<EOF
+{"ts":$NOW,"nics":[{"name":"eth0","ifindex":2,"req":50,"valid":48,"rsp":47,
+"req_1h":20,"valid_1h":19,"rsp_1h":18,
+"req_5h":45,"valid_5h":44,"rsp_5h":43,"req_24h":50,"valid_24h":48,"rsp_24h":47,
+"windows_s":[3600,18000,86400],"buckets":[0,0,50]},
+{"name":"eth1","ifindex":3,"req":70,"valid":70,"rsp":70,
+"req_1h":70,"valid_1h":70,"rsp_1h":70,
+"req_5h":70,"valid_5h":70,"rsp_5h":70,"req_24h":70,"valid_24h":70,"rsp_24h":70,
+"windows_s":[3600,18000,86400],"buckets":[0,0,70]}],
+"clients":{"eth0":[{"ip":"192.168.137.11","req":50,"valid":48,"last_age_s":3}],
+"eth1":[{"ip":"192.168.1.121","req":70,"valid":70,"last_age_s":5}]},
+"clients_total":2,"rsp_source":"iptables"}
+EOF
+
+echo "30. ntpmon stats: nic block embedded verbatim"
+RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" NTPMON_NIC_FILE="$NIC_FILE" \
+       QUERY_STRING="action=stats" "$BIN/ntpmon.cgi" | grep -v '^Content-Type' | grep -v '^$')
+assert_contains "nic ok" '"nic":{"ok":true' "$RESP"
+assert_contains "nic age computed" '"age_s":0' "$RESP"
+assert_contains "eth0 client ip" '192.168.137.11' "$RESP"
+assert_contains "eth1 client ip" '192.168.1.121' "$RESP"
+assert_contains "response count passthrough" '"rsp":47' "$RESP"
+assert_contains "1h window sums passthrough" '"req_1h":20' "$RESP"
+assert_contains "window list passthrough" '"windows_s":\[3600,18000,86400\]' "$RESP"
+assert_contains "5h sums passthrough" '"req_5h":45' "$RESP"
+assert_contains "24h sums passthrough" '"req_24h":50' "$RESP"
+assert_contains "existing keys untouched" '"status":"ok","acl"' "$RESP"
+
+echo "30b. ntpmon stats: whole response is still valid JSON"
+if echo "$RESP" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+assert d['status']=='ok'
+assert d['nic']['ok'] is True
+assert d['nic']['nics'][1]['req_1h']==70
+assert d['nic']['nics'][0]['req_24h']==50
+assert d['nic']['clients']['eth0'][0]['ip']=='192.168.137.11'
+assert d['eth']['names']==['eth0','eth1','eth2','eth3']
+print('parsed ok')
+" > /dev/null 2>&1; then
+    assert_contains "json parses" "ok" "ok"
+else
+    assert_contains "json parses" "parse-failed" "$(echo "$RESP" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>&1 | head -2)"
+fi
+
+echo "30c. ntpmon stats: missing nic snapshot degrades"
+RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" NTPMON_NIC_FILE="$WORK/nope.json" \
+       QUERY_STRING="action=stats" "$BIN/ntpmon.cgi")
+assert_contains "nic flagged missing" '"nic":{"ok":false}' "$RESP"
+assert_contains "stats still ok" '"status":"ok","acl"' "$RESP"
+
+echo "30d. ntpmon stats: oversized snapshot refused, not truncated"
+python3 - "$WORK/nic_big.json" <<'PY'
+import sys
+with open(sys.argv[1], "w") as f:
+    f.write('{"ts":1,"pad":"')
+    f.write("x" * 200000)
+    f.write('"}')
+PY
+RESP=$(DB_PATH="$DB" HTTP_COOKIE="$SID; $CSRF" NTPMON_NIC_FILE="$WORK/nic_big.json" \
+       QUERY_STRING="action=stats" "$BIN/ntpmon.cgi")
+assert_contains "too_large flagged" '"too_large":true' "$RESP"
+if echo "$RESP" | grep -v '^Content-Type' | grep -v '^$' | \
+   python3 -c "import json,sys; json.load(sys.stdin)" 2>/dev/null; then
+    assert_contains "still valid json" "ok" "ok"
+else
+    assert_contains "still valid json" "parse-failed" "truncated object leaked"
+fi
 
 # ── Users module unit tests (direct API, offline) ──────────────────
 echo ""

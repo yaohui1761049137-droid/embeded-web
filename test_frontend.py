@@ -50,6 +50,7 @@ def parse_js_nics(html_text):
 CGI_ACTIONS = (
     ("timesync.cgi", "src/timesync.cgi.c", ("status", "setmode")),
     ("ntpmon.cgi",   "src/ntpmon.cgi.c",   ("stats", "acl_op")),
+    ("log.cgi",      "src/log.cgi.c",      ("sources", "tail")),
 )
 
 
@@ -72,6 +73,31 @@ UPLOT_FILES = (
 )
 
 
+# Per-interface serving panels: the front-end reads r.nic from the stats
+# payload, so the renderer, the two panels and the JSON key must all exist —
+# a partial deploy (e.g. new CGI without the new HTML) would blank the tab.
+NIC_PANEL_MARKERS = (
+    ('id="nic-status-body"', "panel '各网口授时服务状态' missing"),
+    ('id="nic-client-body"', "panel '客户端明细' missing"),
+    ('id="nic-client-seg"', "client interface segmented control missing"),
+    ("function renderNicSeg", "renderNicSeg not defined"),
+    ("function markNicSeg", "markNicSeg not defined"),
+    ("renderNicPanel(r.nic)", "loadNtpMon does not call renderNicPanel"),
+    ("function renderNicPanel", "renderNicPanel not defined"),
+    ("function renderNicClients", "renderNicClients not defined"),
+    ('id="mon-range"', "page-level time range control missing"),
+    ("function setMonWindow", "setMonWindow not defined"),
+    ("function markMonRange", "markMonRange not defined"),
+)
+
+
+def check_nic_panels(root, errors):
+    html = (root / "www" / "control_panel.html").read_text()
+    for marker, msg in NIC_PANEL_MARKERS:
+        if msg and marker not in html:
+            errors.append(msg)
+
+
 def check_uplot(root, errors):
     html = (root / "www" / "control_panel.html").read_text()
     for fname, ref in UPLOT_FILES:
@@ -89,6 +115,7 @@ def check(repo):
     errors = []
     check_cgi_contracts(root, errors)
     check_uplot(root, errors)
+    check_nic_panels(root, errors)
     if c_nics != js_nics:
         errors.append("NIC lists drifted: C=%s JS=%s" % (c_nics, js_nics))
     if not js_nics:
