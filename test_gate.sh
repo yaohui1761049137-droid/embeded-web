@@ -543,6 +543,7 @@ assert_contains "series t array" '"series":{"t":\[' "$RESP"
 assert_contains "per-minute w/ reset break" '"m":\[-1,12,-1,12\]' "$RESP"
 assert_contains "cumulative raw values" '"c":\[10,22,1,13\]' "$RESP"
 assert_contains "eth totals" '"total":\[3,5,0,0\]' "$RESP"
+assert_contains "eth 1m delta (latest interval)" '"last_1m":\[2,5,0,0\]' "$RESP"
 assert_contains "eth 1h delta (reset clamped)" '"last_1h":\[0,5,0,0\]' "$RESP"
 assert_contains "eth 5h delta present" '"last_5h":\[0,5,0,0\]' "$RESP"
 assert_contains "eth 24h delta present" '"last_24h":\[0,5,0,0\]' "$RESP"
@@ -753,14 +754,18 @@ assert_not_contains "no source list leaked to admin" '"sources"' "$RESP"
 NIC_FILE="$WORK/ntp_nic.json"
 NOW=$(date +%s)
 cat > "$NIC_FILE" <<EOF
-{"ts":$NOW,"nics":[{"name":"eth0","ifindex":2,"req":50,"valid":48,"rsp":47,
+{"ts":$NOW,"sec_t0":$((NOW-119)),"nics":[{"name":"eth0","ifindex":2,"req":50,"valid":48,"rsp":47,
+"req_1m":5,"valid_1m":5,"rsp_1m":5,
 "req_1h":20,"valid_1h":19,"rsp_1h":18,
 "req_5h":45,"valid_5h":44,"rsp_5h":43,"req_24h":50,"valid_24h":48,"rsp_24h":47,
-"windows_s":[3600,18000,86400],"buckets":[0,0,50]},
+"windows_s":[60,3600,18000,86400],"buckets":[0,0,50],
+"sec":[0,0,1,2,3]},
 {"name":"eth1","ifindex":3,"req":70,"valid":70,"rsp":70,
+"req_1m":7,"valid_1m":7,"rsp_1m":7,
 "req_1h":70,"valid_1h":70,"rsp_1h":70,
 "req_5h":70,"valid_5h":70,"rsp_5h":70,"req_24h":70,"valid_24h":70,"rsp_24h":70,
-"windows_s":[3600,18000,86400],"buckets":[0,0,70]}],
+"windows_s":[60,3600,18000,86400],"buckets":[0,0,70],
+"sec":[1,1,1,1,1]}],
 "clients":{"eth0":[{"ip":"192.168.137.11","req":50,"valid":48,"last_age_s":3}],
 "eth1":[{"ip":"192.168.1.121","req":70,"valid":70,"last_age_s":5}]},
 "clients_total":2,"rsp_source":"iptables"}
@@ -774,10 +779,13 @@ assert_contains "nic age computed" '"age_s":0' "$RESP"
 assert_contains "eth0 client ip" '192.168.137.11' "$RESP"
 assert_contains "eth1 client ip" '192.168.1.121' "$RESP"
 assert_contains "response count passthrough" '"rsp":47' "$RESP"
+assert_contains "1m window sums passthrough" '"req_1m":5' "$RESP"
 assert_contains "1h window sums passthrough" '"req_1h":20' "$RESP"
-assert_contains "window list passthrough" '"windows_s":\[3600,18000,86400\]' "$RESP"
+assert_contains "window list passthrough" '"windows_s":\[60,3600,18000,86400\]' "$RESP"
 assert_contains "5h sums passthrough" '"req_5h":45' "$RESP"
 assert_contains "24h sums passthrough" '"req_24h":50' "$RESP"
+assert_contains "per-second ring passthrough" '"sec":\[0,0,1,2,3\]' "$RESP"
+assert_contains "per-second t0 passthrough" '"sec_t0":' "$RESP"
 assert_contains "existing keys untouched" '"status":"ok","acl"' "$RESP"
 
 echo "30b. ntpmon stats: whole response is still valid JSON"
@@ -787,7 +795,12 @@ d=json.load(sys.stdin)
 assert d['status']=='ok'
 assert d['nic']['ok'] is True
 assert d['nic']['nics'][1]['req_1h']==70
+assert d['nic']['nics'][0]['req_1m']==5
+assert d['nic']['nics'][0]['windows_s']==[60,3600,18000,86400]
 assert d['nic']['nics'][0]['req_24h']==50
+assert d['nic']['nics'][0]['sec']==[0,0,1,2,3]
+assert d['nic']['nics'][1]['sec']==[1,1,1,1,1]
+assert d['nic']['sec_t0']==d['nic']['ts']-119
 assert d['nic']['clients']['eth0'][0]['ip']=='192.168.137.11'
 assert d['eth']['names']==['eth0','eth1','eth2','eth3']
 print('parsed ok')
