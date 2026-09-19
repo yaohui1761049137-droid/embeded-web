@@ -226,7 +226,8 @@ if (!document.cookie.match(/csrf_token=/)) {
 <div style="display:flex; align-items:center; gap:0.8rem; margin-bottom:1rem">
 <span style="font-size:0.85rem; color:#6a6a7a; white-space:nowrap">时间范围</span>
 <div class="board-tabs" id="mon-range" style="flex:0 0 auto">
-<a class="board-tab active" data-win="3600"  onclick="setMonWindow(3600)">近 1 小时</a>
+<a class="board-tab active" data-win="60"    onclick="setMonWindow(60)">近 1 分钟</a>
+<a class="board-tab"        data-win="3600"  onclick="setMonWindow(3600)">近 1 小时</a>
 <a class="board-tab"        data-win="18000" onclick="setMonWindow(18000)">近 5 小时</a>
 <a class="board-tab"        data-win="86400" onclick="setMonWindow(86400)">近 24 小时</a>
 </div>
@@ -268,12 +269,12 @@ if (!document.cookie.match(/csrf_token=/)) {
 
 <!-- 请求量趋势 -->
 <div class="config-panel">
-<div class="panel-header">chrony 请求量趋势（<span id="ttl-req">近 1 小时</span>）</div>
+<div class="panel-header">chrony 请求量趋势（<span id="ttl-req">近 1 分钟</span>）</div>
 <div class="panel-body">
 <div class="stat-cards">
 <div class="stat-card"><div class="k">当前速率</div><div class="v" id="mon-cur">—<span class="u">条/分</span></div></div>
 <div class="stat-card"><div class="k" id="mon-hour-k">窗口内请求</div><div class="v" id="mon-hour">—</div></div>
-<div class="stat-card"><div class="k">峰值（条/分）</div><div class="v" id="mon-peak">—</div></div>
+<div class="stat-card"><div class="k">峰值（条/秒）</div><div class="v" id="mon-peak">—</div></div>
 <div class="stat-card"><div class="k">累计（自服务启动）</div><div class="v" id="mon-total">—</div></div>
 </div>
 <div id="chart-req"></div>
@@ -292,7 +293,7 @@ if (!document.cookie.match(/csrf_token=/)) {
 
 <!-- 各网口授时服务状态 -->
 <div class="config-panel">
-<div class="panel-header">各网口授时服务状态（<span id="ttl-nic">近 1 小时</span>）</div>
+<div class="panel-header">各网口授时服务状态（<span id="ttl-nic">近 1 分钟</span>）</div>
 <div class="panel-body" style="padding:0">
 <table class="user-table" id="nic-status-table">
 <thead>
@@ -309,7 +310,7 @@ if (!document.cookie.match(/csrf_token=/)) {
 <!-- 客户端明细 -->
 <div class="config-panel">
 <div class="panel-header nic-head">
-<span>客户端明细（<span id="ttl-cli">近 1 小时活跃</span>）</span>
+<span>客户端明细（<span id="ttl-cli">近 1 分钟活跃</span>）</span>
 <span class="nic-seg" id="nic-client-seg"></span>
 </div>
 <div class="panel-body" style="padding:0">
@@ -322,7 +323,7 @@ if (!document.cookie.match(/csrf_token=/)) {
 </tbody>
 </table>
 </div>
-<div class="chart-meta">仅列出近 1 小时内有请求的客户端，按累计请求数排序、每网口最多 32 个；请求数为该客户端被本进程见到起的累计值。仅统计入向 UDP/123 包（含未通过 ACL 的请求）。</div>
+<div class="chart-meta" id="cli-note">仅列出近 1 分钟内有请求的客户端，按累计请求数排序、每网口最多 32 个；请求数为该客户端被本进程见到起的累计值。仅统计入向 UDP/123 包（含未通过 ACL 的请求）。</div>
 </div>
 
 </div>
@@ -1335,22 +1336,25 @@ var CHART_GRID = '#ececf2', CHART_LABEL = '#9a9aab', CHART_LINE = '#6b5b95';
 var reqChart = null, ethChart = null;
 var reqCum = [];                                     /* cumulative series, parallel to chart 1 x */
 var reqSparse = true;   /* few non-zero minutes → mark the bursts with dots */
-var monWindow = 3600;   /* page-level time range, survives the 60s poll */
+var monWindow = 60;     /* page-level time range, survives the 60s poll */
+var reqPerSec = (monWindow === 60);   /* unit the chart-1 instance was built for */
 var reqSeries = null, reqMeta = null, ethSeries = null;  /* last payload, for
                                      re-rendering on a range switch */
-var monWinSfx = '1h';
+var monWinSfx = '1m';
 
 function monWinLabel() {
-    return monWindow === 3600 ? '近 1 小时'
+    return monWindow === 60 ? '近 1 分钟'
+         : monWindow === 3600 ? '近 1 小时'
          : monWindow === 18000 ? '近 5 小时' : '近 24 小时';
 }
 
 /* Switching the range is purely local: the stats payload already carries all
-   three windows (eth.last_*, nic.*_N, and a 24h series), so nothing is
+   four windows (eth.last_*, nic.*_N, and a 24h series), so nothing is
    refetched — the panels just re-render against the same snapshot. */
 function setMonWindow(w) {
     monWindow = w;
-    monWinSfx = (w === 3600) ? '1h' : (w === 18000) ? '5h' : '24h';
+    monWinSfx = (w === 60) ? '1m' : (w === 3600) ? '1h'
+              : (w === 18000) ? '5h' : '24h';
     markMonRange();
     if (typeof nicInfo !== 'undefined' && nicInfo) {
         renderReqChart(reqSeries, reqMeta);
@@ -1375,6 +1379,8 @@ function markMonRange() {
     if (c) c.textContent = lab + '活跃';
     var k = document.getElementById('mon-hour-k');
     if (k) k.textContent = '窗口内请求';
+    var note = document.getElementById('cli-note');
+    if (note) note.textContent = '仅列出' + lab + '内有请求的客户端，按累计请求数排序、每网口最多 32 个；请求数为该客户端被本进程见到起的累计值。仅统计入向 UDP/123 包（含未通过 ACL 的请求）。';
 }
 var ethInfo = { names: [], total: [], hour: [] };
 
@@ -1392,10 +1398,36 @@ function fmtClock(t) {
     return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
 }
 
+/* Second-level tick labels: in the 1-minute window the samples are two
+   minute-aligned points, so HH:MM labels collapse to a row of identical
+   "11:11"s — seconds make each tick distinct. */
+function fmtClockSec(t) {
+    var d = new Date(t * 1000);
+    return ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2) + ':' + ('0' + d.getSeconds()).slice(-2);
+}
+
+/* Shared 条/秒 rendering (peak card + tooltip): the underlying samples are
+   per-minute, so a per-second rate is perMin/60.  fmtNum rounds to integers,
+   so sub-100 values keep one decimal to stay visible (e.g. 0.5). */
+function fmtPerSec(perMin) {
+    if (perMin == null || perMin <= 0) return null;
+    var ps = perMin / 60;
+    return ps >= 100 ? fmtNum(ps) : (Math.round(ps * 10) / 10).toFixed(1).replace(/\.0$/, '');
+}
+
 function fmtTs(t) {
     var d = new Date(t * 1000);
     return ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2) + ' ' +
            ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);
+}
+
+/* Tooltip time for the 1-minute view: the samples there are per-second, so
+ * the label carries seconds too (09-19 11:42:01). */
+function fmtTsSec(t) {
+    var d = new Date(t * 1000);
+    return ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2) + ' ' +
+           ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2) + ':' +
+           ('0' + d.getSeconds()).slice(-2);
 }
 
 /* tooltip plugin: follows the cursor, flips at container edges */
@@ -1459,18 +1491,68 @@ function renderReqChart(s, meta) {
         while (lo < t.length && t[lo] < cut) lo++;
         if (lo > 0) { t = t.slice(lo); m = m.slice(lo); cum = cum.slice(lo); }
     }
-    updateMonCards(t, m, cum);
-    if (!t.length) {
-        if (!reqChart) el.innerHTML = '<p class="chart-empty">暂无采样数据（板上采样器每分钟写入一次）</p>';
-        if (metaEl) metaEl.textContent = '';
-        return;
+    var perSec = (monWindow === 60);
+    /* 1m view: prefer the monitor daemon's per-second request ring — the
+       plotted values are then genuinely per-second samples (条/秒), and the
+       tooltip labels carry seconds.  Old daemons / missing snapshots fall
+       back to the per-minute CSV series divided by 60 (minute-average look). */
+    var secT = null, secM = null, secCum = null;
+    if (perSec && nicInfo && nicInfo.ok && nicInfo.ts && nicInfo.nics) {
+        var an = -1, arrs = [], i2, a2, ok2 = true;
+        for (i2 = 0; i2 < nicInfo.nics.length && ok2; i2++) {
+            a2 = nicInfo.nics[i2].sec;
+            if (!a2 || !a2.length) { ok2 = false; break; }
+            if (an < 0) an = a2.length;
+            else if (a2.length !== an) ok2 = false;
+            arrs.push(a2);
+        }
+        if (ok2 && an > 0) {
+            var ts0 = nicInfo.ts - an + 1, cut2 = nicInfo.ts - 59;
+            secT = []; secM = []; secCum = [];
+            var ci = 0;
+            for (var k2 = 0; k2 < an; k2++) {
+                var e2 = ts0 + k2;
+                /* keep complete seconds only: the newest slot is the current
+                   second mid-accumulation, and plotting its partial count
+                   would fold the whole line down at the right edge */
+                if (e2 < cut2 || e2 >= nicInfo.ts) continue;
+                var v2 = 0;
+                for (i2 = 0; i2 < arrs.length; i2++) v2 += arrs[i2][k2] || 0;
+                while (ci < t.length && t[ci] <= e2) ci++;
+                secT.push(e2);
+                secM.push(v2);
+                secCum.push(ci > 0 ? cum[ci - 1] : null);
+            }
+        }
     }
-    var data = [t, m.map(function(v) { return v < 0 ? null : v; })];
-    reqCum = cum;
-    {
-        var nz = 0, k;
-        for (k = 0; k < m.length; k++) if (m[k] > 0) nz++;
-        reqSparse = (nz <= 200);   /* >200 busy minutes: the fill carries it */
+    var useSec = perSec && secT && secT.length > 0;
+    /* The Y-axis unit belongs to the plot instance, so a unit switch rebuilds
+       the chart (rare: only on a deliberate range click; the poll still takes
+       the cheap setData path while the unit is unchanged). */
+    if (reqChart && reqPerSec !== perSec) {
+        reqChart.destroy(); reqChart = null;
+    }
+    reqPerSec = perSec;
+    var data;
+    if (useSec) {
+        reqCum = secCum;
+        reqSparse = false;   /* dots on a per-second line read as a second line */
+        data = [secT, secM];
+        updateMonCards(secT, secM, secCum, true);
+    } else {
+        updateMonCards(t, m, cum, false);
+        if (!t.length) {
+            if (!reqChart) el.innerHTML = '<p class="chart-empty">暂无采样数据（板上采样器每分钟写入一次）</p>';
+            if (metaEl) metaEl.textContent = '';
+            return;
+        }
+        reqCum = cum;
+        {
+            var nz = 0, k;
+            for (k = 0; k < m.length; k++) if (m[k] > 0) nz++;
+            reqSparse = (nz <= 200);   /* >200 busy minutes: the fill carries it */
+        }
+        data = [t, m.map(function(v) { return v < 0 ? null : (perSec ? v / 60 : v); })];
     }
     if (!reqChart) {
         el.innerHTML = '';
@@ -1512,15 +1594,29 @@ function renderReqChart(s, meta) {
                     grid: { stroke: CHART_GRID, width: 1 },
                     ticks: { stroke: CHART_GRID, width: 1 },
                     values: function(u, splits) {
-                        return splits.map(function(v) { return fmtClock(v); });
+                        /* sub-hour windows: second-level ticks, else the
+                           whole minute would share one HH:MM label */
+                        return splits.map(function(v) {
+                            return monWindow < 3600 ? fmtClockSec(v) : fmtClock(v);
+                        });
                     },
                 },
-                monAxisY('条/分钟'),
+                monAxisY(perSec ? '条/秒' : '条/分钟'),
             ],
             plugins: [monTooltip(function(u, idx) {
                 var tt = u.data[0][idx], mm = u.data[1][idx], cc = reqCum[idx];
+                /* 1m view: the plot (and its Y axis) is in 条/秒 and the
+                   samples are per-second, so the tooltip leads with the
+                   per-second rate and its time carries seconds.  Other
+                   windows keep the per-minute sample as the leading rate. */
+                if (monWindow === 60) {
+                    return '<b>' + fmtTsSec(tt) + '</b><br>每秒 <b>' +
+                           (mm == null ? '—' : fmtPerSec(mm * 60) || '0') + '</b> 条' +
+                           (cc != null ? '<br>累计 ' + fmtNum(cc) + ' 条' : '');
+                }
                 return '<b>' + fmtTs(tt) + '</b><br>每分钟 <b>' +
-                       (mm == null ? '—' : fmtNum(mm)) + '</b> 条' +
+                       (mm == null ? '—' : fmtNum(mm)) + '</b> 条 · 每秒 <b>' +
+                       (fmtPerSec(mm) || '—') + '</b> 条' +
                        (cc != null ? '<br>累计 ' + fmtNum(cc) + ' 条' : '');
             })],
         }, data, el);
@@ -1535,7 +1631,7 @@ function renderReqChart(s, meta) {
     }
 }
 
-function updateMonCards(t, m, cum) {
+function updateMonCards(t, m, cum, perSecData) {
     function set(id, v, unit) {
         var el = document.getElementById(id);
         if (!el) return;
@@ -1550,9 +1646,13 @@ function updateMonCards(t, m, cum) {
         if (m[i] > peak) peak = m[i];
         if (m[i] >= 0 && tEnd - t[i] <= monWindow) hourSum += m[i];
     }
-    set('mon-cur', last < 0 ? '—' : fmtNum(last), '条/分');
+    /* With the per-second series the values ARE 条/秒: 当前速率 scales back
+       up to its 条/分 rate label, and 峰值 is the true per-second peak
+       (burstier than the per-minute average the CSV series can express). */
+    set('mon-cur', last < 0 ? '—' : fmtNum(perSecData ? last * 60 : last), '条/分');
     set('mon-hour', fmtNum(hourSum));
-    set('mon-peak', fmtNum(peak));
+    set('mon-peak', last < 0 ? '—'
+         : perSecData ? (fmtPerSec(peak * 60) || '—') : (fmtPerSec(peak) || '—'));
     set('mon-total', fmtNum(cum.length ? cum[cum.length - 1] : 0));
 }
 
@@ -1733,7 +1833,13 @@ buildNICTabs();
 loadTimesyncStatus();
 setInterval(loadTimesyncStatus, 3000);
 loadNtpMon();
-setInterval(loadNtpMon, 60000);
+/* 1m view plots per-second samples: poll the stats snapshot every 3s so the
+ * newest seconds appear near-live; the wider ranges stay on the 60s poll. */
+function schedNtpMon() {
+    setTimeout(function() { loadNtpMon(); schedNtpMon(); },
+               monWindow === 60 ? 3000 : 60000);
+}
+schedNtpMon();
 </script>
 
 </body>

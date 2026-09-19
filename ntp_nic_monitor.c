@@ -46,17 +46,21 @@
 
 #define MAX_NICS     8
 #define CLIENT_SLOTS 1024          /* power of two: (i,ip) open addressing */
-/* The UI offers 1h / 5h / 24h, so the rings must cover the LARGEST window;
+/* The UI offers 1m / 1h / 5h / 24h, so the rings must cover the LARGEST window;
    the smaller ones are summed from a suffix of the same ring. */
 #define BUCKETS      1440          /* 24 h of one-minute buckets */
 #define BUCKETS_OUT  60            /* only the trailing hour is published */
 #define CLIENT_TTL   86400         /* keep clients for the widest window; the
                                     * UI filters by the selected range */
-#define NWINDOWS     3
-static const int g_windows[NWINDOWS]     = { 3600, 18000, 86400 };
-static const char *g_winsfx[NWINDOWS]    = { "1h", "5h", "24h" };
+#define NWINDOWS     4
+static const int g_windows[NWINDOWS]     = { 60, 3600, 18000, 86400 };
+static const char *g_winsfx[NWINDOWS]    = { "1m", "1h", "5h", "24h" };
 #define TOP_CLIENTS  32            /* per interface, by request count */
 #define IPT_OUT      32768         /* buffer for `iptables -nvw -L OUTPUT` */
+#define SSEC         120           /* trailing seconds published per NIC: the
+                                    * UI's 1-minute view plots per-second
+                                    * samples, so the ring must reach back
+                                    * past a full minute (2x margin). */
 
 typedef struct {
     int used;
@@ -80,6 +84,8 @@ typedef struct {
     unsigned int vbucket[BUCKETS]; /* valid NTP per minute */
     unsigned int rbucket[BUCKETS]; /* responses per minute */
     long bucket_min;               /* the minute the newest bucket belongs to */
+    unsigned int sreq[SSEC];       /* requests per second, ring by epoch-second */
+    long sreq_min;                 /* the newest second ever written (0 = none) */
 } NicStat;
 
 static NicStat   g_nics[MAX_NICS];
@@ -202,6 +208,23 @@ static unsigned int bucket_sum(const unsigned int *arr, long bucket_min, long m,
     return s;
 }
 
+/* Roll the per-second request ring forward to second `s`, clearing skipped
+ * seconds (idle or post-gap) the same way bucket_advance does for minutes —
+ * without this, a slot would keep serving the count from exactly SSEC
+ * seconds earlier as if it belonged to the current second. */
+static void sec_advance(NicStat *ns, long s) {
+    long d, k;
+    if (s == ns->sreq_min) return;
+    d = s - ns->sreq_min;
+    if (ns->sreq_min <= 0) {          /* first packet ever: ring is all-zero */
+        ns->sreq_min = s;
+        return;
+    }
+    if (d < 0 || d > SSEC) d = SSEC;  /* clock jump: clear everything */
+    for (k = 1; k <= d; k++) ns->sreq[(ns->sreq_min + k) % SSEC] = 0;
+    ns->sreq_min = s;
+}
+
 static void account(NicStat *ns, unsigned int src_ip, int is_valid, time_t now) {
     long m = now / 60;
     ClientEnt *c;
@@ -210,6 +233,11 @@ static void account(NicStat *ns, unsigned int src_ip, int is_valid, time_t now) 
     bucket_advance(ns, m);
     ns->bucket[m % BUCKETS]++;
     if (is_valid) ns->vbucket[m % BUCKETS]++;
+    {
+        long s = (long)now;
+        sec_advance(ns, s);
+        ns->sreq[s % SSEC]++;
+    }
     c = client_get(ns->ifindex, src_ip, now);
     if (c) {
         c->req++;
@@ -411,7 +439,7 @@ static void write_json(void) {
     if (!f) { logmsg("cannot write %s: %s", tmp, strerror(errno)); return; }
     fchmod(fileno(f), 0644);
 
-    fprintf(f, "{\"ts\":%ld,\"nics\":[", (long)now);
+    fprintf(f, "{\"ts\":%ld,\"sec_t0\":%ld,\"nics\":[", (long)now, (long)now - SSEC + 1);
     for (i = 0; i < g_nnic; i++) {
         if (!g_nics[i].used) continue;
         /* Both windows are published: the cumulative totals (since daemon
@@ -457,6 +485,22 @@ static void write_json(void) {
                     fprintf(f, "%s%u", k > BUCKETS - BUCKETS_OUT ? "," : "", v);
                 }
                 fprintf(f, "]");
+            }
+        }
+        fprintf(f, "],\"sec\":[");
+        {
+            /* trailing SSEC seconds, oldest -> newest, 0 for idle/gapped
+             * seconds (the same masking bucket_sum applies to the minute
+             * rings).  The UI's 1-minute view slices the trailing minute
+             * out of this and plots the values as 条/秒 directly. */
+            int k;
+            for (k = 0; k < SSEC; k++) {
+                long e = (long)now - (SSEC - 1) + k;
+                unsigned int v = 0;
+                if (g_nics[i].sreq_min > 0 && e <= g_nics[i].sreq_min &&
+                    g_nics[i].sreq_min - e < SSEC)
+                    v = g_nics[i].sreq[e % SSEC];
+                fprintf(f, "%s%u", k ? "," : "", v);
             }
         }
         fprintf(f, "]}");

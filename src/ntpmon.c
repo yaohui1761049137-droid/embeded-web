@@ -221,10 +221,14 @@ static size_t jappend(char *out, size_t outlen, size_t pos,
 
 /* Per-interface delta windows.  The whole 24 h ring is loaded anyway
  * (NTPMON_MAX_ROWS = 1441 min), so every offered range is computed from the
- * same rows — no extra I/O, and the UI can switch without a round trip. */
-#define ETH_WINDOWS 3
-static const long long g_eth_win[ETH_WINDOWS] = { 3600, 18000, 86400 };
-static const char *g_eth_sfx[ETH_WINDOWS]     = { "1h", "5h", "24h" };
+ * same rows — no extra I/O, and the UI can switch without a round trip.
+ * The 1m entry scans back 90 s, not 60: the sampler fires every minute with
+ * AccuracySec=5 s, so a strict 60 s bound misses the previous row whenever
+ * the sample lands a few seconds late and would read as a 0 delta.  90 s
+ * always covers exactly one sampling interval (two when a sample is skipped). */
+#define ETH_WINDOWS 4
+static const long long g_eth_win[ETH_WINDOWS] = { 90, 3600, 18000, 86400 };
+static const char *g_eth_sfx[ETH_WINDOWS]     = { "1m", "1h", "5h", "24h" };
 
 /* Counter delta for one interface over the trailing window seconds.
  * Negative results clamp to 0: the iptables counters start over when the

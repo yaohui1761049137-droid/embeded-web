@@ -8,7 +8,9 @@ Wants=chrony.service
 Type=simple
 # Needs CAP_NET_RAW for AF_PACKET and root for `iptables -I OUTPUT`.
 User=root
-ExecStart=/usr/local/bin/ntp_nic_monitor -f /var/db/ntp_nic.json -i 5
+# -i 1: the 1-minute UI view plots per-second samples, so the snapshot (and
+# the iptables OUTPUT poll feeding it) must land every second.
+ExecStart=/usr/local/bin/ntp_nic_monitor -f /var/db/ntp_nic.json -i 1
 Restart=always
 RestartSec=5
 # Unprivileged hardening: the daemon only reads packets and runs iptables.
