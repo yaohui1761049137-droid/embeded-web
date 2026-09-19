@@ -1,0 +1,109 @@
+[16:00:12] == 压测开始：双口对称爬升 500 1000 2000 4000 8000 16000 20000 24000 ==
+[16:00:12] == 阶段A 档位 500pps/口 开始 ==
+[16:00:21]   500pps t+7s w=6s e0: req=3451(5751pps) rate=100.1% | e1: req=3458(5763pps) rate=100.1% | RcvbufErrΔ=0
+[16:00:27]   500pps t+14s w=5s e0: req=3116(6232pps) rate=100.0% | e1: req=3117(6234pps) rate=100.0% | RcvbufErrΔ=0
+[16:00:33]   500pps t+20s w=5s e0: req=3152(6304pps) rate=100.0% | e1: req=3151(6302pps) rate=100.0% | RcvbufErrΔ=0
+[16:00:39]   500pps t+26s w=5s e0: req=3121(6242pps) rate=100.0% | e1: req=3121(6242pps) rate=100.0% | RcvbufErrΔ=0
+[16:00:46]   500pps t+32s w=5s e0: req=3097(6194pps) rate=100.0% | e1: req=3098(6196pps) rate=100.0% | RcvbufErrΔ=0
+[16:00:52]   500pps t+39s w=5s e0: req=3100(6200pps) rate=100.0% | e1: req=3099(6198pps) rate=100.0% | RcvbufErrΔ=0
+[16:01:00]    档位 500 结束 (e0:  | e1: )
+[16:01:00] == 阶段A 档位 1000pps/口 开始 ==
+[16:01:08]   1000pps t+55s w=6s e0: req=7151(11918pps) rate=100.1% | e1: req=7165(11941pps) rate=100.1% | RcvbufErrΔ=0
+[16:01:14]   1000pps t+61s w=5s e0: req=6270(12540pps) rate=100.0% | e1: req=6272(12544pps) rate=100.0% | RcvbufErrΔ=0
+[16:01:21]   1000pps t+67s w=5s e0: req=6291(12582pps) rate=100.0% | e1: req=6290(12580pps) rate=100.0% | RcvbufErrΔ=0
+[16:01:27]   1000pps t+74s w=5s e0: req=6396(12792pps) rate=100.0% | e1: req=6396(12792pps) rate=100.0% | RcvbufErrΔ=0
+[16:01:33]   1000pps t+80s w=5s e0: req=6317(12634pps) rate=100.0% | e1: req=6318(12636pps) rate=100.1% | RcvbufErrΔ=0
+[16:01:40]   1000pps t+86s w=5s e0: req=6269(12538pps) rate=100.0% | e1: req=6268(12536pps) rate=99.9% | RcvbufErrΔ=0
+[16:01:47]    档位 1000 结束 (e0:  | e1: )
+[16:01:47] == 阶段A 档位 2000pps/口 开始 ==
+[16:01:56]   2000pps t+103s w=6s e0: req=14076(23460pps) rate=100.1% | e1: req=14111(23518pps) rate=100.1% | RcvbufErrΔ=0
+[16:02:02]   2000pps t+109s [作废: minute-boundary]
+[16:02:09]   2000pps t+115s w=5s e0: req=12606(25212pps) rate=100.0% | e1: req=12611(25222pps) rate=100.0% | RcvbufErrΔ=0
+[16:02:15]   2000pps t+122s w=5s e0: req=12914(25828pps) rate=99.9% | e1: req=12902(25804pps) rate=100.0% | RcvbufErrΔ=0
+[16:02:22]   2000pps t+128s w=5s e0: req=12749(25498pps) rate=100.0% | e1: req=12762(25524pps) rate=100.0% | RcvbufErrΔ=0
+[16:02:28]   2000pps t+135s w=5s e0: req=12595(25190pps) rate=100.0% | e1: req=12584(25168pps) rate=100.0% | RcvbufErrΔ=0
+[16:02:36]    档位 2000 结束 (e0:  | e1: )
+[16:02:36] == 阶段A 档位 4000pps/口 开始 ==
+[16:02:44]   4000pps t+151s w=6s e0: req=27986(46643pps) rate=100.1% | e1: req=28059(46765pps) rate=100.2% | RcvbufErrΔ=0
+[16:02:51]   4000pps t+157s w=5s e0: req=25852(51704pps) rate=100.0% | e1: req=25853(51706pps) rate=100.0% | RcvbufErrΔ=0
+[16:02:57]   4000pps t+164s w=5s e0: req=25434(50868pps) rate=100.0% | e1: req=25421(50842pps) rate=99.9% | RcvbufErrΔ=0
+[16:03:03]   4000pps t+170s [作废: minute-boundary]
+[16:03:10]   4000pps t+176s w=5s e0: req=25360(50720pps) rate=100.0% | e1: req=25353(50706pps) rate=100.0% | RcvbufErrΔ=0
+[16:03:16]   4000pps t+183s w=5s e0: req=25136(50272pps) rate=100.0% | e1: req=25136(50272pps) rate=100.0% | RcvbufErrΔ=0
+[16:03:24]    档位 4000 结束 (e0:  | e1: )
+[16:03:24] == 阶段A 档位 8000pps/口 开始 ==
+[16:03:32]   8000pps t+199s w=6s e0: req=54824(91373pps) rate=96.4% | e1: req=54925(91541pps) rate=96.4% | RcvbufErrΔ=0
+[16:03:38]   8000pps t+205s w=5s e0: req=50140(100280pps) rate=96.5% | e1: req=50165(100330pps) rate=96.5% | RcvbufErrΔ=0
+[16:03:45]   8000pps t+211s w=5s e0: req=50184(100368pps) rate=97.1% | e1: req=50338(100676pps) rate=97.3% | RcvbufErrΔ=0
+[16:03:51]   8000pps t+218s w=5s e0: req=50748(101496pps) rate=93.9% | e1: req=50572(101144pps) rate=93.9% | RcvbufErrΔ=0
+[16:03:57]   8000pps t+224s w=5s e0: req=51222(102444pps) rate=99.8% | e1: req=51225(102450pps) rate=99.7% | RcvbufErrΔ=0
+[16:04:03]   8000pps t+230s [作废: minute-boundary]
+[16:04:11]    档位 8000 结束 (e0:  | e1: )
+[16:04:11] == 阶段A 档位 16000pps/口 开始 ==
+[16:04:20]   16000pps t+246s w=6s e0: req=114517(190861pps) rate=99.1% | e1: req=114743(191238pps) rate=98.9% | RcvbufErrΔ=0
+[16:04:27]   16000pps t+253s w=5s e0: req=109885(219770pps) rate=100.2% | e1: req=110248(220496pps) rate=100.4% | RcvbufErrΔ=0
+[16:04:34]   16000pps t+260s w=5s e0: req=121394(242788pps) rate=100.4% | e1: req=121147(242294pps) rate=100.3% | RcvbufErrΔ=0
+[16:04:41]   16000pps t+267s w=5s e0: req=109909(219818pps) rate=99.8% | e1: req=110094(220188pps) rate=100.2% | RcvbufErrΔ=229
+[16:04:48]   16000pps t+274s w=5s e0: req=108110(216220pps) rate=99.4% | e1: req=107940(215880pps) rate=99.1% | RcvbufErrΔ=299
+[16:04:56]    档位 16000 结束 (e0:  | e1: )
+[16:04:56] == 阶段A 档位 20000pps/口 开始 ==
+[16:05:05]   20000pps t+291s [作废: minute-boundary]
+[16:05:11]   20000pps t+298s w=5s e0: req=133264(266528pps) rate=80.2% | e1: req=134461(268922pps) rate=79.7% | RcvbufErrΔ=122
+[16:05:18]   20000pps t+304s w=5s e0: req=134237(268474pps) rate=78.2% | e1: req=132589(265178pps) rate=79.1% | RcvbufErrΔ=477
+[16:05:18] !! 应答率连续两窗 < 80%（e0=78.2% e1=79.1%），触发回落
+[16:05:21]    档位 20000 结束 (e0:  | e1: )
+[16:05:21] == 切换到阶段 B（高→低回落）: 16000 12000 8000 6000 4000 3000 2000 1000 500 ==
+[16:05:21] == 阶段B 档位 16000pps/口 开始 ==
+[16:05:29]   16000pps t+316s w=6s e0: req=112256(187093pps) rate=96.4% | e1: req=112472(187453pps) rate=96.2% | RcvbufErrΔ=0
+[16:05:36]   16000pps t+322s w=5s e0: req=104679(209358pps) rate=99.5% | e1: req=104770(209540pps) rate=99.8% | RcvbufErrΔ=0
+[16:05:36]    ✓ 应答率恢复 ≥95%（恢复点：16000pps t+322s）
+[16:05:42]   16000pps t+329s w=5s e0: req=104953(209906pps) rate=99.5% | e1: req=105126(210252pps) rate=99.4% | RcvbufErrΔ=0
+[16:05:49]   16000pps t+335s w=5s e0: req=107342(214684pps) rate=99.9% | e1: req=107145(214290pps) rate=99.9% | RcvbufErrΔ=200
+[16:05:57]    档位 16000 结束 (e0:  | e1: )
+[16:05:57] == 阶段B 档位 12000pps/口 开始 ==
+[16:06:05]   12000pps t+352s [作废: minute-boundary]
+[16:06:12]   12000pps t+358s w=5s e0: req=76298(152596pps) rate=63.5% | e1: req=76166(152332pps) rate=63.6% | RcvbufErrΔ=0
+[16:06:19]   12000pps t+365s w=5s e0: req=83246(166492pps) rate=72.2% | e1: req=83334(166668pps) rate=72.5% | RcvbufErrΔ=0
+[16:06:26]    档位 12000 结束 (e0:  | e1: )
+[16:06:26] == 阶段B 档位 8000pps/口 开始 ==
+[16:06:35]   8000pps t+381s w=6s e0: req=55697(92828pps) rate=96.6% | e1: req=55749(92915pps) rate=96.6% | RcvbufErrΔ=0
+[16:06:41]   8000pps t+388s w=5s e0: req=50054(100108pps) rate=94.1% | e1: req=50054(100108pps) rate=94.1% | RcvbufErrΔ=0
+[16:06:47]   8000pps t+394s w=5s e0: req=49894(99788pps) rate=98.3% | e1: req=49910(99820pps) rate=98.3% | RcvbufErrΔ=0
+[16:06:54]   8000pps t+400s w=5s e0: req=50840(101680pps) rate=92.5% | e1: req=50817(101634pps) rate=92.3% | RcvbufErrΔ=0
+[16:07:01]    档位 8000 结束 (e0:  | e1: )
+[16:07:01] == 阶段B 档位 6000pps/口 开始 ==
+[16:07:10]   6000pps t+416s w=6s e0: req=41449(69081pps) rate=100.2% | e1: req=41587(69311pps) rate=100.1% | RcvbufErrΔ=0
+[16:07:16]   6000pps t+423s w=5s e0: req=37339(74678pps) rate=100.0% | e1: req=37321(74642pps) rate=100.0% | RcvbufErrΔ=0
+[16:07:22]   6000pps t+429s w=5s e0: req=37164(74328pps) rate=99.9% | e1: req=37134(74268pps) rate=99.9% | RcvbufErrΔ=0
+[16:07:29]   6000pps t+435s w=5s e0: req=37951(75902pps) rate=100.0% | e1: req=37964(75928pps) rate=100.1% | RcvbufErrΔ=0
+[16:07:36]    档位 6000 结束 (e0:  | e1: )
+[16:07:36] == 阶段B 档位 4000pps/口 开始 ==
+[16:07:45]   4000pps t+451s w=6s e0: req=27671(46118pps) rate=100.1% | e1: req=27731(46218pps) rate=100.1% | RcvbufErrΔ=0
+[16:07:51]   4000pps t+458s w=5s e0: req=25684(51368pps) rate=100.0% | e1: req=25700(51400pps) rate=100.0% | RcvbufErrΔ=0
+[16:07:58]   4000pps t+464s w=5s e0: req=26925(53850pps) rate=100.0% | e1: req=26921(53842pps) rate=100.0% | RcvbufErrΔ=0
+[16:08:05]    档位 4000 结束 (e0:  | e1: )
+[16:08:05] == 阶段B 档位 3000pps/口 开始 ==
+[16:08:14]   3000pps t+480s w=6s e0: req=20839(34731pps) rate=100.1% | e1: req=20891(34818pps) rate=100.1% | RcvbufErrΔ=0
+[16:08:20]   3000pps t+487s w=5s e0: req=18852(37704pps) rate=100.0% | e1: req=18842(37684pps) rate=100.0% | RcvbufErrΔ=0
+[16:08:27]   3000pps t+493s w=5s e0: req=19439(38878pps) rate=100.0% | e1: req=19466(38932pps) rate=100.1% | RcvbufErrΔ=0
+[16:08:34]    档位 3000 结束 (e0:  | e1: )
+[16:08:34] == 阶段B 档位 2000pps/口 开始 ==
+[16:08:43]   2000pps t+510s w=6s e0: req=13937(23228pps) rate=100.1% | e1: req=13981(23301pps) rate=100.1% | RcvbufErrΔ=0
+[16:08:49]   2000pps t+516s w=5s e0: req=12700(25400pps) rate=100.0% | e1: req=12702(25404pps) rate=100.0% | RcvbufErrΔ=0
+[16:08:56]   2000pps t+522s w=5s e0: req=12745(25490pps) rate=100.0% | e1: req=12742(25484pps) rate=99.9% | RcvbufErrΔ=0
+[16:09:02]   2000pps t+529s [作废: minute-boundary]
+[16:09:10]    档位 2000 结束 (e0:  | e1: )
+[16:09:10] == 阶段B 档位 1000pps/口 开始 ==
+[16:09:18]   1000pps t+545s w=6s e0: req=6955(11591pps) rate=100.1% | e1: req=6977(11628pps) rate=100.2% | RcvbufErrΔ=0
+[16:09:25]   1000pps t+552s w=6s e0: req=6333(10555pps) rate=99.9% | e1: req=6323(10538pps) rate=99.9% | RcvbufErrΔ=0
+[16:09:31]   1000pps t+558s w=5s e0: req=6261(12522pps) rate=100.0% | e1: req=6265(12530pps) rate=100.0% | RcvbufErrΔ=0
+[16:09:37]   1000pps t+564s w=5s e0: req=6358(12716pps) rate=100.0% | e1: req=6353(12706pps) rate=100.0% | RcvbufErrΔ=0
+[16:09:45]    档位 1000 结束 (e0:  | e1: )
+[16:09:45] == 阶段B 档位 500pps/口 开始 ==
+[16:09:53]   500pps t+580s w=6s e0: req=3435(5725pps) rate=100.1% | e1: req=3442(5736pps) rate=100.1% | RcvbufErrΔ=0
+[16:10:00]   500pps t+587s [作废: minute-boundary]
+[16:10:06]   500pps t+593s [作废: minute-boundary]
+[16:10:13]   500pps t+599s w=5s e0: req=3180(6360pps) rate=100.0% | e1: req=3178(6356pps) rate=100.0% | RcvbufErrΔ=0
+[16:10:20]    档位 500 结束 (e0:  | e1: )
+[16:10:20] == 压测结束 ==
+[16:10:20] 恢复点: 16000pps t+322s
