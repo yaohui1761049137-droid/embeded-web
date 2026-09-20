@@ -51,10 +51,9 @@ if (!document.cookie.match(/csrf_token=/)) {
 <!-- Top navigation bar -->
 <nav class="top-nav">
 <div class="nav-links">
-<a data-tab="status" onclick="switchTab('status')" class="active">服务器状态查看</a>
 <a data-tab="network" onclick="switchTab('network');loadNICConfig()">网络参数配置</a>
 <a data-tab="ntp" onclick="switchTab('ntp')">NTP及PTP时间服务配置</a>
-<a data-tab="monitor" onclick="switchTab('monitor')">服务监控及报警</a>
+<a data-tab="monitor" onclick="switchTab('monitor')" class="active">服务监控及报警</a>
 <a data-tab="timesync" onclick="switchTab('timesync')">时间服务校验设置</a>
 <a data-tab="redundancy" onclick="switchTab('redundancy')">主备协同配置</a>
 	<a data-tab="usermgr" onclick="switchTab('usermgr');loadUserList()" id="nav-usermgr" style="display:none">用户管理</a>
@@ -70,11 +69,6 @@ if (!document.cookie.match(/csrf_token=/)) {
 <div id="pass-expiry-banner" class="pass-expiry-banner" style="display:none"></div>
 
 <!-- Tab 1: 服务器状态查看 -->
-<div id="tab-status" class="tab-content active">
-<h2>服务器状态查看</h2>
-<p class="tab-status">● System Ready</p>
-</div>
-
 <!-- Tab 2: 网络参数配置 (Redesigned) -->
 <div id="tab-network" class="tab-content">
 <h2>网络参数配置</h2>
@@ -181,7 +175,7 @@ if (!document.cookie.match(/csrf_token=/)) {
 <p class="placeholder-text">开发中...</p>
 </div>
 
-<div id="tab-monitor" class="tab-content">
+<div id="tab-monitor" class="tab-content active">
 <style>
 /* monitor tab only: chart theme hooks + summary cards */
 #tab-monitor .chart-empty { color: #9a9aab; font-size: 0.85rem; padding: 2rem 1rem; }
