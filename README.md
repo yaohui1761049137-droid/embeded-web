@@ -169,6 +169,13 @@ embeded_Lighttpd/
 │   └── uPlot.min.css          图表库样式（vendored）
 ├── docs/adr/                  ADR 决策记录（0002 = 密码策略，0003 = 本地网络配置）
 ├── docs/ntp-monitor.md        NTP 监控设计说明（数据源、ACL 语义与重启策略）
+├── docs/foolproof-deploy.md   傻瓜式部署手册（Step1–Step9 全流程 + 踩坑速查总表）
+├── docs/headless-deploy-guide.md  无 HDMI/无外网排障手册（按现象查：SSH/死锁/授时三层）
+├── docs/timing-wiring-2026-09-20/ 授时链路接线图（照片标注版 + 原理图 + 接线表）
+├── docs/diagnosis/            SSH 排障探针脚本 ×18（主机密钥损坏定案过程）
+├── deploy/                    部署脚本 ×9（SSH 引导/构建/集成/overlay/授时栈/登录与功能验证）
+├── debs/                      离线依赖 arm64 deb ×4（lighttpd/mod-openssl/xxhash/chrony 3.4）
+├── pps_tod/                   PPS+TOD→chrony 用户态授时栈源码 ×10（含 README 溯源说明）
 ├── rollback_watchdog.sh       eth0 回滚看门狗（systemd-run 触发 + 开机恢复双入口）
 ├── rollback-recover.service   开机回滚恢复 oneshot 服务
 ├── chrony_acl_apply.sh        NTP 黑白名单应用助手（root，经 sudoers 白名单调用）
@@ -185,125 +192,94 @@ embeded_Lighttpd/
 
 ## 快速开始
 
+> **傻瓜式部署请直接照 [`docs/foolproof-deploy.md`](docs/foolproof-deploy.md) 执行**：
+> Step1–Step9 全流程、每一步的验收标准、失败对照与踩坑速查总表都在里面，
+> 2026-09-20/21 已在无 HDMI、无外网的鲁班猫 2N 上两次真机实测通过
+> （功能 12/12 + 断电重启自恢复 + 授时链路 µs 级锁定）。
+> 本节是速查版：所有命令在 PC（Windows）上 git clone 本仓库后直接粘贴。
+> 手册中的示例地址为 `root@192.168.1.111`，换板卡时全局替换 IP 即可
+> （`deploy/` 内 Python 脚本的 `HOST` 常量同改）。
+
+### 部署包（仓库自带，克隆即用，无需外网）
+
+| 目录 | 内容 |
+|---|---|
+| `src/` `www/` `config/` | CGI 源码 / 前端 / lighttpd 配置（含本次实测修复） |
+| `debs/` | 4 个 arm64 离线 deb：lighttpd 1.4.59 (bpo10) + mod-openssl + libxxhash0 + **chrony 3.4**（替换厂商 ntp） |
+| `deploy/` | SSH 引导 / 板上构建 / 系统集成 / uart7 overlay / 授时栈部署 / 登录流与 12 步功能验证 |
+| `pps_tod/` | PPS+TOD→chrony 授时栈源码 ×10（默认串口 ttyS3 **必须传 `-t /dev/ttyS7`**，GPIO 默认 chip3:line5 已对） |
+
 ### 依赖
 
-- **目标板**：ARM aarch64，Debian Buster，gcc 8.3+
-- **运行时**：Lighttpd 1.4.59+ (with mod_openssl)，OpenSSL 1.1.1+，PCRE
-- **网络**：NetworkManager（Debian Buster 自带 1.14），nmcli
-- **编译**：仅需 gcc + make，零外部库依赖（SQLite 和 SHA-256 均内嵌）
+- **目标板**：ARM aarch64，Debian Buster（鲁班猫官方镜像即可），gcc 8.3+
+- **运行时**：Lighttpd 1.4.59+ (with mod_openssl)（用 `debs/` 离线安装，板卡无需外网），
+  NetworkManager + nmcli（镜像自带），chrony 3.4（`debs/` 内）
+- **PC 侧**：Python 3.10+ `pip install paramiko`，Windows OpenSSH（无 git/plink 也能全流程）
 
-### 安装 Lighttpd
+### 一页部署流水（Step1–Step9）
 
-```bash
-# 下载 Debian Buster arm64 包并安装
-dpkg -i libxxhash0_*.deb lighttpd_*.deb lighttpd-mod-openssl_*.deb
+```bat
+:: Step1 SSH 引导（新板必做；若握手全 RST = 主机密钥损坏，板上 ssh-keygen -A，详见手册 §2）
+python deploy\kbdint_ssh.py
+ssh -o BatchMode=yes root@192.168.1.111 "hostname"
+
+:: Step2 离线依赖（chrony 与厂商 ntp 冲突，先卸 ntp）
+scp -o BatchMode=yes debs\*.deb root@192.168.1.111:/tmp/
+ssh -o BatchMode=yes root@192.168.1.111 "dpkg -i /tmp/libxxhash0.deb /tmp/lighttpd.deb /tmp/lighttpd-mod-openssl.deb && dpkg -r ntp && dpkg -i /tmp/chrony.deb"
+
+:: Step3 阶段一 HTTPS：部署配置 + 自签证书 + 起服务（验收 301 跳转，命令见手册 §4）
+scp -o BatchMode=yes config\lighttpd.conf root@192.168.1.111:/etc/lighttpd/
+scp -o BatchMode=yes config\10-cgi.conf config\10-ssl.conf root@192.168.1.111:/etc/lighttpd/conf-available/
+::   证书/软链/enable 的完整一条命令见 docs/foolproof-deploy.md §4（勿手打旧 Phase1，含 99-unconfigured 坑）
+
+:: Step4 阶段二 CGI：板上编译 13 个 CGI + db_init（-lpthread -ldl，www 资产从 /tmp 显式复制）
+tar czf src.tar.gz src
+scp -o BatchMode=yes src.tar.gz www\* root@192.168.1.111:/tmp/
+scp -o BatchMode=yes deploy\build_on_board.sh root@192.168.1.111:/tmp/
+ssh -o BatchMode=yes root@192.168.1.111 "bash /tmp/build_on_board.sh"      :: 验收 DEPLOY-OK
+
+:: Step5 登录流验证（顺带设置正式密码 Testpassword1234@；跳过则 Step7 无法登录）
+python deploy\verify_login.py
+
+:: Step6 系统集成（sudoers 白名单×2 / dialout / NTP 监控栈 / 回滚看门狗，一键脚本）
+scp -o BatchMode=yes chrony_acl_apply.sh ntp_stats_sample.sh ntp_nic_monitor.c ntp-stats.service ntp-stats.timer ntp-nic-monitor.service rollback_watchdog.sh rollback-recover.service root@192.168.1.111:/tmp/
+scp -o BatchMode=yes deploy\integrate_system.sh root@192.168.1.111:/tmp/
+ssh -o BatchMode=yes root@192.168.1.111 "bash /tmp/integrate_system.sh"
+::   无外网板卡必做（堵死启动事务的 systemd-time-wait-sync）：
+ssh -o BatchMode=yes root@192.168.1.111 "systemctl disable --now systemd-time-wait-sync && systemctl mask systemd-time-wait-sync"
+
+:: Step7 功能验证 12/12（验收 12/12 steps passed -> PASS）
+python deploy\verify_functions.py
+
+:: Step8 重启复测（md5 基线 → reboot → ~1 分钟 SSH 自恢复 → 5 服务自启 → 复验；myapp.db 变更属预期）
+ssh -o BatchMode=yes root@192.168.1.111 "md5sum /etc/ssh/ssh_host_ed25519_key /etc/lighttpd/lighttpd.conf /var/db/myapp.db /home/www/cgi-bin/main.cgi /usr/local/bin/ntp_nic_monitor /root/.ssh/authorized_keys > /var/db/md5_baseline.txt; sync; reboot"
+::   等 1 分钟后：
+ssh -o BatchMode=yes root@192.168.1.111 "systemctl is-active lighttpd chrony ntp-nic-monitor ntp-stats.timer; md5sum -c /var/db/md5_baseline.txt"
+python deploy\verify_functions.py
+
+:: Step9 授时链路（可选，需 UT986 接线：GPIO3_A5=pin11、UART7 M1 TX/RX=pin35/37、共地、天线锁星）
+scp -o BatchMode=yes deploy\enable_uart7_overlay.sh root@192.168.1.111:/tmp/
+ssh -o BatchMode=yes root@192.168.1.111 "bash /tmp/enable_uart7_overlay.sh && sync && (sleep 2; reboot)"
+::   等 1 分钟：ls -l /dev/ttyS7  应为 crw-rw---- root dialout
+scp -o BatchMode=yes pps_tod\pps_tod.c pps_tod\pps_tod_watchdog.sh pps_tod\pps_tod_watchdog.conf pps_tod\pps_tod_watchdog.service pps_tod\pps_tod_rtc_save.sh pps_tod\pps_tod_rtc.service pps_tod\pps_tod_rtc.timer pps_tod\sanitize-drift.sh pps_tod\sanitize-drift.service pps_tod\chrony-restart.conf root@192.168.1.111:/tmp/
+scp -o BatchMode=yes deploy\install_timing_stack.sh deploy\fix_crlf_and_start.sh root@192.168.1.111:/tmp/
+ssh -o BatchMode=yes root@192.168.1.111 "bash /tmp/install_timing_stack.sh && bash /tmp/fix_crlf_and_start.sh"
+::   接好 UT986 约 2 分钟后验收：
+ssh -o BatchMode=yes root@192.168.1.111 "cat /run/pps_tod/status; chronyc tracking; chronyc sources; date"
+::   期望：good=1；Reference ID 50505300 (PPS)；date 为真实时间
 ```
 
-### 部署 Phase 1（HTTPS，不动 CGI）
+### 常见坑速查（完整表见 docs/foolproof-deploy.md §11）
 
-```bash
-# 1. 部署配置
-scp config/*.conf root@<board>:/etc/lighttpd/
-scp config/10-*.conf root@<board>:/etc/lighttpd/conf-available/
-ssh root@<board> '
-  ln -sf /etc/lighttpd/conf-available/10-cgi.conf /etc/lighttpd/conf-enabled/
-  ln -sf /etc/lighttpd/conf-available/10-ssl.conf /etc/lighttpd/conf-enabled/
-'
-
-# 2. 生成 TLS 证书
-ssh root@<board> '
-  openssl req -x509 -newkey rsa:2048 -keyout /etc/ssl/private/server.key \
-    -out /etc/ssl/certs/server.crt -days 3650 -nodes -subj "/CN=lubancat.local"
-  cat /etc/ssl/certs/server.crt /etc/ssl/private/server.key > /etc/lighttpd/server.pem
-  chmod 600 /etc/lighttpd/server.pem
-'
-
-# 3. 停止 Boa，启动 Lighttpd
-ssh root@<board> '
-  kill $(pidof boa) 2>/dev/null
-  lighttpd -f /etc/lighttpd/lighttpd.conf
-'
-```
-
-### 部署 Phase 2（多用户系统 + 本地网络配置）
-
-```bash
-# 1. 打包源码并上传
-tar czf src.tar.gz src/*.c src/*.h
-scp src.tar.gz www/* root@<board>:/tmp/
-
-# 2. 编译（含 nmcli.c）
-ssh root@<board> '
-  cd /tmp && tar xzf src.tar.gz && cd src
-  # sqlite3.o 跨部署复用（tar 只含 .c/.h，不会被覆盖）
-  [ -f sqlite3.o ] || gcc -c -O2 -DSQLITE_THREADSAFE=0 sqlite3.c -o sqlite3.o
-
-  for src in login.cgi.c logout.cgi.c main.cgi.c network.cgi.c \
-             user_list.cgi.c user_create.cgi.c user_passwd.cgi.c \
-             user_toggle.cgi.c user_delete.cgi.c user_change_pass.cgi.c \
-             timesync.cgi.c ntpmon.cgi.c log.cgi.c; do
-    name=$(echo $src | sed "s/\.cgi\.c//" | sed "s/\.c//").cgi
-    gcc -Wall -O2 -o $name $src common.c auth.c gate.c users.c nmcli.c timesync.c ntpmon.c sha256.c sqlite3.o -lpthread -ldl
-  done
-
-  # 初始化数据库
-  gcc -Wall -O2 -o db_init db_init.c auth.c gate.c common.c sha256.c sqlite3.o -lpthread -ldl
-  mkdir -p /var/db
-  ./db_init admin
-  chown -R www-data:www-data /var/db
-
-  # 安装
-  cp *.cgi /home/www/cgi-bin/
-  chown www-data:www-data /home/www/cgi-bin/*.cgi
-  chmod 755 /home/www/cgi-bin/*.cgi
-  cp control_panel.html index.html style.css change.html uPlot.iife.min.js uPlot.min.css /home/www/
-'
-
-# 3. www-data sudoers 白名单（nmcli 调用入口，务必先于任何网络配置使用）
-ssh root@<board> '
-  cat > /etc/sudoers.d/99-www-nmcli <<EOF
-www-data ALL=(ALL) NOPASSWD: /usr/bin/nmcli -t -f NAME\\,UUID connection show, /usr/bin/nmcli -t connection show *, /usr/bin/nmcli -t device show *, /usr/bin/nmcli connection show *, /usr/bin/nmcli connection add type ethernet ifname *, /usr/bin/nmcli connection modify *, /usr/bin/nmcli connection up *, /usr/bin/systemd-run --on-active=180 /usr/local/bin/rollback_watchdog.sh
-EOF
-  chmod 440 /etc/sudoers.d/99-www-nmcli
-  visudo -cf /etc/sudoers.d/99-www-nmcli
-
-  # 3b. www-data 加入 dialout 组（timesync.cgi 写 /dev/ttyS7 控制 UT986 接收机）
-  usermod -aG dialout www-data
-  systemctl restart lighttpd   # 组变更对新 CGI 进程生效
-
-  # 3c. NTP 监控（黑白名单 + 流量图表）
-  #     助手脚本 + 采样器 + 采样定时器
-  cp chrony_acl_apply.sh ntp_stats_sample.sh /usr/local/bin/
-  chmod 755 /usr/local/bin/chrony_acl_apply.sh /usr/local/bin/ntp_stats_sample.sh
-  cp ntp-stats.service ntp-stats.timer /etc/systemd/system/
-  systemctl enable --now ntp-stats.timer
-  #     逐网口授时监测（客户端明细 + 应答率；AF_PACKET + iptables OUTPUT）
-  gcc -O2 -Wall -o /usr/local/bin/ntp_nic_monitor ntp_nic_monitor.c
-  cp ntp-nic-monitor.service /etc/systemd/system/
-  systemctl daemon-reload && systemctl enable --now ntp-nic-monitor
-  #     chrony ACL 托管文件 + include（一次性；随后重启 chrony 激活）
-  #     现有生效的 allow/deny 行迁入 acl-web.conf（行为不变）
-  printf "# Web-managed NTP access rules (chrony allow/deny) - do not edit by hand.\nallow 192.168.137.0/24\n" > /etc/chrony/acl-web.conf
-  chmod 644 /etc/chrony/acl-web.conf
-  grep -q "include /etc/chrony/acl-web.conf" /etc/chrony/chrony.conf || {
-      sed -i '/^allow /d; /^deny /d' /etc/chrony/chrony.conf
-      echo "include /etc/chrony/acl-web.conf" >> /etc/chrony/chrony.conf
-  }
-  systemctl restart chrony
-  #     www-data sudoers 白名单（ACL helper 入口）
-  cat > /etc/sudoers.d/99-www-ntpacl <<EOF
-www-data ALL=(root) NOPASSWD: /usr/local/bin/chrony_acl_apply.sh add allow *, /usr/local/bin/chrony_acl_apply.sh add deny *, /usr/local/bin/chrony_acl_apply.sh remove *
-EOF
-  chmod 440 /etc/sudoers.d/99-www-ntpacl
-  visudo -cf /etc/sudoers.d/99-www-ntpacl
-
-  # 4. 回滚看门狗 + 开机恢复服务
-  cp rollback_watchdog.sh /usr/local/bin/
-  chmod 755 /usr/local/bin/rollback_watchdog.sh
-  cp rollback-recover.service /etc/systemd/system/
-  systemctl enable rollback-recover.service
-'
-```
+| 现象 | 一句话处理 |
+|---|---|
+| SSH 握手全被 RST | 板上 `ssh-keygen -A`（主机密钥损坏，auth.log 定案） |
+| 服务全超时/启动卡死 | `systemctl mask systemd-time-wait-sync`（无外网必踩） |
+| chrony.deb 拒装 | 先 `dpkg -r ntp` |
+| 跳转丢主机名 / cipher 解析失败 | 本仓库 `config/` 已修（301 捕获组 + 单行 cipher） |
+| systemd `Failed at step EXEC ... No such file` | CRLF 行尾 → `fix_crlf_and_start.sh` |
+| chrony `Not synchronised` | 无时间源非故障：接 UT986（Step9）或外网 NTP |
+| 面板授时 tab 空白 | pps_tod 未部署 → 完成部署包 Step9 |
 
 ### 网络配置说明（ADR-0003）
 
@@ -322,8 +298,9 @@ EOF
 
 ### 时间同步子系统（PPS + TOD + chrony）
 
-板载时基由**独立的授时子系统**提供（独立于本 Web 项目交付），Web 侧只做只读展示
-与受限控制：
+板载时基由**独立的授时子系统**提供（源码已收编入仓库 [`pps_tod/`](pps_tod/README.md)，
+一键部署脚本 [`deploy/install_timing_stack.sh`](deploy/install_timing_stack.sh)），
+Web 侧只做只读展示与受限控制：
 
 ```
 UT986 接收机 ── 1PPS 秒脉冲 ─▶ GPIO3_A5 ─(gpiochip 边沿事件,内核时间戳)─┐
@@ -356,8 +333,10 @@ UT986 接收机 ── 1PPS 秒脉冲 ─▶ GPIO3_A5 ─(gpiochip 边沿事件,
 - **可靠性配套**：`pps_tod_watchdog`（样本断流 30s → 有界重启；参考丢失 → DEGRADED 告警，
   1 小时 3 次上限；7 项故障注入实测通过）+ RTC 每 6h 保存 + drift 消毒；
   「服务监控及报警」Tab 提供 NTP 黑白名单与请求量图表（见 `docs/ntp-monitor.md`）。
-- 方案细节与验证记录见 `docs/gps-pps-time-sync.md` 及授时子系统交付文档
-  （`PPS_TOD_chrony-会话交付总结.md`、`鲁班猫2N-PPS-TOD-chrony-实施记录.md`）。
+- 方案细节与验证记录见 `docs/gps-pps-time-sync.md`、`pps_tod/README.md` 及授时子系统交付文档
+  （`PPS_TOD_chrony-会话交付总结.md`、`鲁班猫2N-PPS-TOD-chrony-实施记录.md`）；
+  串口/PPS 的物理接线与设备树启用（uart7-m1 overlay）见 `docs/timing-wiring-2026-09-20/`
+  与 `docs/headless-deploy-guide.md` §3.7。
 
 ### 密码策略与迁移（ADR-0002）
 

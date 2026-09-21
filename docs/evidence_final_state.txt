@@ -1,0 +1,50 @@
+Linux lubancat 4.19.232 #23 SMP Fri Jul 11 15:48:20 CST 2025 aarch64 GNU/Linux
+10.13
+ 20:46:25 up 3 min,  1 user,  load average: 1.09, 0.51, 0.21
+===
+active
+active
+active
+active
+enabled
+enabled
+enabled
+enabled
+enabled
+===
+LISTEN    0         0                  0.0.0.0:80               0.0.0.0:*       
+LISTEN    0         0                  0.0.0.0:443              0.0.0.0:*       
+===
+/home/www/:
+cgi-bin
+change.html
+control_panel.html
+index.html
+style.css
+uPlot.iife.min.js
+uPlot.min.css
+
+/home/www/cgi-bin/:
+log.cgi
+login.cgi
+logout.cgi
+main.cgi
+network.cgi
+ntpmon.cgi
+timesync.cgi
+user_change_pass.cgi
+user_create.cgi
+user_delete.cgi
+user_list.cgi
+user_passwd.cgi
+user_toggle.cgi
+===
+md5_baseline.txt
+myapp.db
+ntp_nic.json
+ntp_stats.csv
+===
+ii  chrony                                 3.4-4+deb10u2                       arm64        Versatile implementation of the Network Time Protocol
+ii  libxxhash0:arm64                       0.8.0-2~bpo10+1                     arm64        shared library for xxhash
+ii  lighttpd                               1.4.59-1~bpo10+1                    arm64        fast webserver with minimal memory footprint
+ii  lighttpd-mod-openssl                   1.4.59-1~bpo10+1                    arm64        TLS support using OpenSSL module for lighttpd

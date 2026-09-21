@@ -1,0 +1,117 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="760" viewBox="0 0 1240 760" font-family="'Noto Sans CJK SC','Noto Sans CJK JP',sans-serif">
+  <defs>
+    <marker id="ah-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#00963c"/></marker>
+    <marker id="ah-blue"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#145ac8"/></marker>
+    <marker id="ah-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#e67814"/></marker>
+    <marker id="ah-gray"  viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#3c3c3c"/></marker>
+  </defs>
+
+  <rect width="1240" height="760" fill="#ffffff"/>
+  <text x="40" y="46" font-size="28" font-weight="bold" fill="#111">鲁班猫 LubanCat 2N 授时链路接线原理图</text>
+  <text x="1200" y="46" font-size="16" fill="#888" text-anchor="end">2026-09-20</text>
+  <text x="40" y="76" font-size="15" fill="#666">UT986 接收机 → 1PPS + NMEA（ttyS7）→ pps_tod → chrony SHM refclock　·　板内为数据流示意（非接线）</text>
+
+  <!-- ══ UT986 接收机（端子占位）══ -->
+  <rect x="60" y="140" width="324" height="420" fill="#fcfcfc" stroke="#444" stroke-width="2" stroke-dasharray="7,5"/>
+  <text x="222" y="172" font-size="20" font-weight="bold" fill="#111" text-anchor="middle">UT986 接收机</text>
+  <text x="210" y="194" font-size="13" fill="#888" text-anchor="middle">（端子按实物丝印占位）</text>
+
+  <!-- UT986 端子（顺序与板侧脚位对齐，避免连线交叉） -->
+  <rect x="296" y="191" width="88" height="28" fill="#fff" stroke="#666"/>
+  <text x="340" y="210" font-size="13" text-anchor="middle" fill="#111">1PPS OUT</text>
+  <rect x="296" y="271" width="88" height="28" fill="#fff" stroke="#666"/>
+  <text x="340" y="290" font-size="13" text-anchor="middle" fill="#111">命令 IN(RX)</text>
+  <rect x="296" y="311" width="88" height="28" fill="#fff" stroke="#666"/>
+  <text x="340" y="330" font-size="13" text-anchor="middle" fill="#111">NMEA OUT(TX)</text>
+  <rect x="296" y="481" width="88" height="28" fill="#fff" stroke="#666"/>
+  <text x="340" y="500" font-size="13" text-anchor="middle" fill="#111">GND</text>
+
+  <!-- ══ LubanCat 2N 板 ══ -->
+  <rect x="620" y="120" width="560" height="440" fill="#f6f8fb" stroke="#333" stroke-width="2.5"/>
+  <text x="900" y="150" font-size="20" font-weight="bold" fill="#111" text-anchor="middle">LubanCat 2N（RK3568）</text>
+  <text x="900" y="170" font-size="13" fill="#888" text-anchor="middle">40-pin 排针 · 下排 = 奇数脚 · pin 1 在左端</text>
+
+  <!-- 排针细节（竖置，奇数脚在左列，由上往下为 pin 1→39） -->
+  <rect x="636" y="190" width="72" height="316" fill="#4a63c8" stroke="#2c3f8f"/>
+  <g fill="#8fa4e8">
+    <circle cx="690" cy="222" r="3.2"/><circle cx="690" cy="237" r="3.2"/><circle cx="690" cy="252" r="3.2"/>
+    <circle cx="690" cy="267" r="3.2"/><circle cx="690" cy="282" r="3.2"/><circle cx="690" cy="297" r="3.2"/>
+    <circle cx="690" cy="312" r="3.2"/><circle cx="690" cy="327" r="3.2"/><circle cx="690" cy="342" r="3.2"/>
+    <circle cx="690" cy="357" r="3.2"/><circle cx="690" cy="372" r="3.2"/><circle cx="690" cy="387" r="3.2"/>
+    <circle cx="690" cy="402" r="3.2"/><circle cx="690" cy="417" r="3.2"/><circle cx="690" cy="432" r="3.2"/>
+    <circle cx="690" cy="447" r="3.2"/><circle cx="690" cy="462" r="3.2"/><circle cx="690" cy="477" r="3.2"/>
+    <circle cx="656" cy="222" r="3.2"/><circle cx="656" cy="237" r="3.2"/><circle cx="656" cy="252" r="3.2"/>
+    <circle cx="656" cy="297" r="3.2"/><circle cx="656" cy="312" r="3.2"/><circle cx="656" cy="327" r="3.2"/>
+    <circle cx="656" cy="342" r="3.2"/><circle cx="656" cy="357" r="3.2"/><circle cx="656" cy="372" r="3.2"/>
+    <circle cx="656" cy="387" r="3.2"/><circle cx="656" cy="402" r="3.2"/><circle cx="656" cy="417" r="3.2"/>
+    <circle cx="656" cy="432" r="3.2"/>
+  </g>
+  <!-- 目标脚高亮：pin 9 / 11 / 35 / 37 / 39 -->
+  <g fill="#e84040">
+    <rect x="647" y="250" width="18" height="11" rx="2"/>
+    <rect x="647" y="265" width="18" height="11" rx="2"/>
+    <rect x="647" y="445" width="18" height="11" rx="2"/>
+    <rect x="647" y="460" width="18" height="11" rx="2"/>
+    <rect x="647" y="475" width="18" height="11" rx="2"/>
+  </g>
+  <text x="712" y="260" font-size="12" fill="#c02020" font-weight="bold">9 GND</text>
+  <text x="712" y="275" font-size="12" fill="#c02020" font-weight="bold">11 GPIO3_A5</text>
+  <text x="712" y="455" font-size="12" fill="#c02020" font-weight="bold">35 UART7_TX</text>
+  <text x="712" y="470" font-size="12" fill="#c02020" font-weight="bold">37 UART7_RX</text>
+  <text x="712" y="485" font-size="12" fill="#c02020" font-weight="bold">39 GND</text>
+
+  <!-- 板内数据流 -->
+  <rect x="800" y="200" width="360" height="44" fill="#eef4ee" stroke="#00963c"/>
+  <text x="980" y="217" font-size="14" fill="#111" text-anchor="middle">pps_tod 守护进程（独立交付 · 纯用户态）</text>
+  <text x="980" y="235" font-size="12" fill="#555" text-anchor="middle">整秒+亚秒配对 · gpiochip 边沿事件（内核时间戳）</text>
+  <line x1="980" y1="244" x2="980" y2="260" stroke="#555" stroke-width="2" marker-end="url(#ah-gray)"/>
+  <rect x="800" y="262" width="360" height="34" fill="#f2f2f2" stroke="#888"/>
+  <text x="980" y="284" font-size="14" fill="#111" text-anchor="middle">SysV SHM（0x4e545030）</text>
+  <line x1="980" y1="296" x2="980" y2="316" stroke="#555" stroke-width="2" marker-end="url(#ah-gray)"/>
+  <rect x="800" y="318" width="360" height="44" fill="#eef2fa" stroke="#145ac8"/>
+  <text x="980" y="335" font-size="14" fill="#111" text-anchor="middle">chrony refclock SHM 0 → PLL 锁钟</text>
+  <text x="980" y="353" font-size="12" fill="#666" text-anchor="middle">实测 µs 级 · Reference ID 50505300 (PPS) · Stratum 1</text>
+  <rect x="800" y="386" width="360" height="42" fill="#fdf3ea" stroke="#e67814"/>
+  <text x="980" y="403" font-size="14" fill="#111" text-anchor="middle">timesync.cgi（Web 管理页）</text>
+  <text x="980" y="419" font-size="12" fill="#666" text-anchor="middle">向 /dev/ttyS7 只写 $CFGGNSS / $CFGSAVE（模式切换）</text>
+
+  <!-- eth 口 -->
+  <rect x="800" y="448" width="178" height="56" fill="#fff" stroke="#333" stroke-width="1.5"/>
+  <text x="888" y="470" font-size="13" font-weight="bold" fill="#111" text-anchor="middle">eth0 · 192.168.137.100/24</text>
+  <text x="888" y="492" font-size="11" fill="#666" text-anchor="middle">管理口（Web https / SSH）</text>
+  <rect x="982" y="448" width="178" height="56" fill="#fff" stroke="#333" stroke-width="1.5"/>
+  <text x="1071" y="470" font-size="13" font-weight="bold" fill="#111" text-anchor="middle">eth1 · 192.168.1.150/24</text>
+  <text x="1071" y="492" font-size="11" fill="#666" text-anchor="middle">NTP 服务口</text>
+  <text x="672" y="524" font-size="12" fill="#999" text-anchor="middle">eth2 / eth3 未接线</text>
+
+  <!-- 板外对端 -->
+  <line x1="888" y1="504" x2="888" y2="558" stroke="#666" stroke-width="2" marker-end="url(#ah-gray)"/>
+  <rect x="768" y="560" width="240" height="44" fill="#f6f6f6" stroke="#888" rx="6"/>
+  <text x="888" y="579" font-size="14" fill="#111" text-anchor="middle">PC / 管理终端</text>
+  <text x="888" y="596" font-size="12" fill="#777" text-anchor="middle">192.168.137.0/24 网段</text>
+  <line x1="1071" y1="504" x2="1071" y2="558" stroke="#666" stroke-width="2" marker-end="url(#ah-gray)"/>
+  <rect x="971" y="560" width="200" height="44" fill="#f6f6f6" stroke="#888" rx="6"/>
+  <text x="1071" y="579" font-size="14" fill="#111" text-anchor="middle">NTP 客户端 / 压测源</text>
+  <text x="1071" y="596" font-size="12" fill="#777" text-anchor="middle">192.168.1.0/24 网段</text>
+
+  <!-- ══ 授时连线 UT986 ↔ 板 ══ -->
+  <line x1="384" y1="205" x2="647" y2="270" stroke="#00963c" stroke-width="3" marker-end="url(#ah-green)"/>
+  <text x="512" y="196" font-size="13" fill="#00963c" text-anchor="middle" font-weight="bold">3.3V TTL · 秒脉冲</text>
+
+  <line x1="384" y1="325" x2="660" y2="465" stroke="#145ac8" stroke-width="3" marker-end="url(#ah-blue)"/>
+  <text x="505" y="417" font-size="14" fill="#145ac8" text-anchor="middle" font-weight="bold">115200 8N1</text>
+  <text x="505" y="433" font-size="13" fill="#145ac8" text-anchor="middle" letter-spacing="0.4">$GNRMC / ZDA → pps_tod</text>
+
+  <line x1="647" y1="450" x2="384" y2="285" stroke="#e67814" stroke-width="3" marker-end="url(#ah-orange)"/>
+  <text x="512" y="352" font-size="14" fill="#e67814" text-anchor="middle" font-weight="bold">模式切换 · 只写</text>
+  <text x="512" y="369" font-size="13" fill="#e67814" text-anchor="middle" letter-spacing="0.4">$CFGGNSS / $CFGSAVE</text>
+
+  <line x1="384" y1="495" x2="647" y2="480" stroke="#3c3c3c" stroke-width="3" marker-end="url(#ah-gray)"/>
+  <text x="512" y="515" font-size="13" fill="#3c3c3c" text-anchor="middle" font-weight="bold">共地（pin 9 / 39）</text>
+
+  <!-- ══ 底部说明条 ══ -->
+  <rect x="40" y="648" width="1160" height="92" fill="#f4f4f4" stroke="#ddd" rx="8"/>
+  <text x="60" y="674" font-size="14" fill="#333">• 电气：接收机与板<tspan font-weight="bold">必须共 GND</tspan>；信号电平 3.3V TTL 可与板直连（RS232 电平需转换）；串口实配 <tspan font-weight="bold">115200 8N1</tspan>（pps_tod -b 115200 -t /dev/ttyS7）</text>
+  <text x="60" y="698" fill="#333" font-size="14">• 串口为<tspan font-weight="bold">交叉连接</tspan>：UT986 TX → 板 RX（pin 37），板 TX（pin 35）→ UT986 RX；timesync.cgi 只写不读（避免抢走 pps_tod 的 NMEA）</text>
+  <text x="60" y="722" font-size="13" fill="#888">• UT986 侧端子名称为占位（按实物丝印补全）· 板侧脚号依据官方 LubanCat2 (V1-V2) 40-pin 引脚表 · 来源：README §时间同步子系统 / handoff-2026-09-17</text>
+</svg>

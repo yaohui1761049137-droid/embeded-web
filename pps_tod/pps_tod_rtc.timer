@@ -1,0 +1,13 @@
+[Unit]
+Description=Write the RTC every 6h (power-cycle base)
+
+[Timer]
+# Same schedule as the cron entry this replaces: minute 0 of hours 0/6/12/18.
+OnCalendar=*-*-* 00/6:00:00
+AccuracySec=1min
+# No catch-up when the board was off: a power cycle reads the RTC, it does not
+# need yesterday's write replayed.
+Persistent=false
+
+[Install]
+WantedBy=timers.target

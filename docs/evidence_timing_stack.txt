@@ -1,0 +1,61 @@
+== 授时栈部署后状态（2026-09-21） ==
+active
+active
+active
+
+-- units enabled:
+enabled
+enabled
+enabled
+enabled
+
+-- /run/pps_tod/status:
+ts=2026-09-21 11:33:30
+good=1
+last_good_age_s=0
+offset_us=62
+anchor_fresh=1
+sec_gated=0
+sec_noedge=0
+sec_noanchor=0
+sec_badtod=0
+rt_vs_mono_us=39
+anchor_seq=126
+consec_gated=0
+forced_resets=1
+reset_state=OK
+
+-- chronyc tracking:
+Reference ID    : 50505300 (PPS)
+Stratum         : 1
+Ref time (UTC)  : Mon Sep 21 03:33:24 2026
+System time     : 0.000001796 seconds fast of NTP time
+Last offset     : +0.000001351 seconds
+RMS offset      : 0.000004684 seconds
+Frequency       : 19.662 ppm slow
+Residual freq   : +0.004 ppm
+Skew            : 0.411 ppm
+Root delay      : 0.050000001 seconds
+Root dispersion : 0.000045143 seconds
+Update interval : 4.0 seconds
+Leap status     : Normal
+
+-- chronyc sources:
+210 Number of sources = 1
+MS Name/IP address         Stratum Poll Reach LastRx Last sample               
+===============================================================================
+#* PPS                           0   2   377     6  +7062ns[+8386ns] +/-   25ms
+
+-- chronyc sourcestats:
+210 Number of sources = 1
+Name/IP Address            NP  NR  Span  Frequency  Freq Skew  Offset  Std Dev
+==============================================================================
+PPS                        26  14   101     +0.004      0.393    +13ns    17us
+
+-- 当日日志(尾部):
+11:31:27 PPS: coarse clock step by +239745897.449s (anchor_seq=3 off_target=1789961487 resets=1/h)
+STAT: window=60s ts=2026-09-21 11:32:25 n=58 off_us min=-31 avg=+780 max=+1887 tod_n=61 gated=3 noedge=0 noanchor=1 badtod=0
+STAT: window=60s ts=2026-09-21 11:33:26 n=61 off_us min=-47 avg=+5 max=+60 tod_n=61 gated=0 noedge=0 noanchor=0 badtod=0
+
+-- date:
+Mon Sep 21 11:33:30 CST 2026

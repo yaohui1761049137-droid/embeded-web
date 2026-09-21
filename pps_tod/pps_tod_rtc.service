@@ -1,0 +1,9 @@
+[Unit]
+Description=Persist the disciplined system time to the RTC
+# Only worth writing once the clock is actually being disciplined.
+After=chrony.service pps_tod.service
+Wants=chrony.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/pps_tod_rtc_save.sh

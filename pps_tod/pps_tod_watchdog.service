@@ -1,0 +1,12 @@
+[Unit]
+Description=PPS+TOD sync-chain watchdog (restarts pps_tod on GOOD-sample starvation)
+After=pps_tod.service chrony.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/pps_tod_watchdog.sh
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

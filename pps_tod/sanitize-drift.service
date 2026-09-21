@@ -1,0 +1,10 @@
+[Unit]
+Description=Sanitize implausible chrony drift before chrony starts
+Before=chrony.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/sanitize-drift.sh
+
+[Install]
+WantedBy=multi-user.target

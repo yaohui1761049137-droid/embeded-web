@@ -4,6 +4,7 @@
 db_init
 *.tar.gz
 *.deb
+!debs/*.deb
 
 # Database
 *.db

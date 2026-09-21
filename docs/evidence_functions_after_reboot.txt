@@ -1,0 +1,14 @@
+[PASS] login root                             HTTP 302
+[PASS] main.cgi panel                         HTTP 200 len 74591
+[PASS] network.cgi get eth0                   {"status":"ok","ipv4":{"ip":"192.168.1.111","mask":"255.255.255.0","gateway":"192.168.1.1"},"dns":""
+[PASS] timesync.cgi status                    {"status":"ok","ts":"2019-02-14 20:45:23","chrony":{"ok":true,"sources":[],"tracking":{"ref_id":"000
+[PASS] ntpmon.cgi stats                       {"status":"ok","acl":{"ok":true,"rules":[{"action":"allow","cidr":"192.168.137.0/24"}],"file_mtime":
+[PASS] log.cgi sources                        {"status":"ok","root":"/var/log","sources":[{"id":"pps_tod","label":"授时守护进程（当日）","path":"/var/log/pp
+[PASS] user_list.cgi                          {"status":"ok","users":[{"id":1,"username":"root","role":"root","enabled":1,"created_at":1550146540,
+[PASS] user_create.cgi testuser_tmp           {"status":"ok","message":"User created"}
+[PASS] user_list shows testuser_tmp           id=3
+[PASS] user_delete.cgi testuser_tmp           {"status":"ok","message":"User deleted"}
+[PASS] user_list testuser_tmp gone            
+[PASS] logout.cgi                             HTTP 302
+
+[RESULT] 12/12 steps passed -> PASS

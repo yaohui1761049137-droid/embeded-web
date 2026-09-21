@@ -1,0 +1,15 @@
+=== uart7 overlay 启用（野火 uEnv 机制，2026-09-21） ===
+方法：/boot/uEnv/uEnv.txt 取消注释 dtoverlay=/dtb/overlay/rk356x-lubancat-uart7-m1-overlay.dtbo
+      （先备份 uEnv.txt.bak-before-uart7；enable_uboot_overlays=1 已开）
+      脚本：deploy/enable_uart7_overlay.sh
+重启后：
+  up 1 min, SSH 自动恢复（无 HDMI）
+  ls -l /dev/ttyS7  ->  crw-rw---- 1 root dialout 4, 71  (4,71)
+  ls /sys/class/tty | grep ttyS -> 仅 ttyS7（唯一启用的 uart）
+含义：
+  - TOD 串口 /dev/ttyS7 已就位，www-data 在 dialout 组可直接读写 →
+    面板「时间服务校验设置」的 UT986 模式选择（timesync.cgi setmode 写 $CFGGNSS）链路已打通
+  - PPS 侧按路线 1 无需内核模块：pps_tod 走 /dev/gpiochip3 边沿事件（设备已存在）
+注意：
+  headless-deploy-guide.md §3.7 原判定"需重编 dtb 烧写"不成立——厂商镜像自带 overlay
+  机制（/boot/uEnv/uEnv.txt + /boot/dtb/overlay/*.dtbo），取消注释重启即可，零重编。
