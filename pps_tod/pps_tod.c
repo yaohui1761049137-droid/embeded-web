@@ -336,6 +336,25 @@ static int anchor_seq = 0;          /* consecutive anchors advancing by 1s */
 static time_t anchor_prev_S = 0;    /* previous anchor second */
 static int strike_sign = 0;         /* sign of the current gated run */
 
+/* receiver fix/satellite state ($--GGA, display only; written by the serial
+   thread, read by status_update in the gpio thread — plain ints, single
+   writer per field, torn reads impossible on aligned int) */
+static int g_rx_fix = -1;           /* GGA field 6: fix quality, -1 = no GGA yet */
+static int g_rx_sats = -1;          /* GGA field 7: satellites in use */
+static long long g_gga_mono = 0;    /* monotonic ts of the last GGA sentence */
+
+/* per-constellation satellites-in-use ($--GSA, display only).  GSA sentences
+   repeat every second per constellation; each arrival overwrites the count
+   (latest-wins, no cross-sentence accumulation — 12-slot sentences may be
+   chained, but the same second's second sentence simply overwrites the first
+   with its own count, so count ALL non-empty slots per sentence and MAX them
+   below).  -1 = that constellation's GSA never seen since daemon start. */
+static int g_sats_gps = -1, g_sats_bds = -1, g_sats_glo = -1, g_sats_gal = -1;
+static int g_sats_qzss = -1, g_sats_sbas = -1;
+static long long g_gsa_gps_mono = 0, g_gsa_bds_mono = 0,
+                 g_gsa_glo_mono = 0, g_gsa_gal_mono = 0;
+static long long g_gsa_qzss_mono = 0, g_gsa_sbas_mono = 0;
+
 /* ---------------- NMEA TOD parsing ---------------- */
 static int getnth(char *line, int n, char *out, int outsz) {
     char *p = line; int i;
@@ -358,6 +377,88 @@ static time_t parse_line(char *line) {
     if (getnth(line, 0, f, sizeof(f)) < 0) return 0;
     int is_rmc = (strlen(f) >= 6 && strncmp(f + 3, "RMC", 3) == 0);
     int is_zda = (strlen(f) >= 6 && strncmp(f + 3, "ZDA", 3) == 0);
+    int is_gga = (strlen(f) >= 6 && strncmp(f + 3, "GGA", 3) == 0);
+    int is_gsa = (strlen(f) >= 6 && strncmp(f + 3, "GSA", 3) == 0);
+    int is_svnum = (strlen(f) >= 6 && strncmp(f, "$SVNUM", 6) == 0);
+    if (is_svnum) {
+        /* UT986 vendor sentence (protocol spec 表 1-56): per-constellation
+           tracked counts, one self-contained sentence per second — plain
+           overwrite of every slot.  $SVNUM,gps,,bds,,gal,,glo,,qzss,,sbas,rsv
+           (counts at odd getnth indices 1/3/5/7/9/11; even indices reserved
+           and empty).  Display only; never an anchor. */
+        char q[16];
+        int k;
+        for (k = 0; k < 6; k++) {
+            int val;
+            long long now_m;
+            if (getnth(line, 1 + 2 * k, q, sizeof(q)) < 0) break;
+            if (!q[0] || q[0] == '*') break;
+            val = atoi(q);
+            now_m = now_mono_ns();
+            if (k == 0) { g_sats_gps = val; g_gsa_gps_mono = now_m; }
+            else if (k == 1) { g_sats_bds = val; g_gsa_bds_mono = now_m; }
+            else if (k == 2) { g_sats_gal = val; g_gsa_gal_mono = now_m; }
+            else if (k == 3) { g_sats_glo = val; g_gsa_glo_mono = now_m; }
+            else if (k == 4) { g_sats_qzss = val; g_gsa_qzss_mono = now_m; }
+            else { g_sats_sbas = val; g_gsa_sbas_mono = now_m; }
+        }
+        return 0;
+    }
+    if (is_gsa) {
+        /* $--GSA,M,fixmode,prn1..prn12(12 slots),pdop,hdop,vdop — active
+           satellites per constellation; the 2 chars after '$' are the talker
+           (GP=GPS, BD/GB=BDS, GL=GLONASS, GA=Galileo).  Count non-empty
+           slots (fields 3..14); chained 12-slot sentences for the same
+           talker keep the max within this second's repeats.  Display only;
+           never an anchor. */
+        char tk[3], q[16];
+        int used = 0, i;
+        tk[0] = f[1]; tk[1] = f[2]; tk[2] = 0;
+        for (i = 3; i <= 14; i++) {
+            if (getnth(line, i, q, sizeof(q)) < 0) break;
+            if (q[0] && q[0] != '*') used++;
+        }
+        if (used > 0) {
+            long long now_m = now_mono_ns();
+            if (strcmp(tk, "GP") == 0) {
+                if (!g_gsa_gps_mono || now_m - g_gsa_gps_mono > 500000000LL)
+                    g_sats_gps = 0;          /* new second's burst: restart */
+                g_sats_gps += used;
+                g_gsa_gps_mono = now_m;
+            } else if (strcmp(tk, "BD") == 0 || strcmp(tk, "GB") == 0) {
+                if (!g_gsa_bds_mono || now_m - g_gsa_bds_mono > 500000000LL)
+                    g_sats_bds = 0;
+                g_sats_bds += used;
+                g_gsa_bds_mono = now_m;
+            } else if (strcmp(tk, "GL") == 0) {
+                if (!g_gsa_glo_mono || now_m - g_gsa_glo_mono > 500000000LL)
+                    g_sats_glo = 0;
+                g_sats_glo += used;
+                g_gsa_glo_mono = now_m;
+            } else if (strcmp(tk, "GA") == 0) {
+                if (!g_gsa_gal_mono || now_m - g_gsa_gal_mono > 500000000LL)
+                    g_sats_gal = 0;
+                g_sats_gal += used;
+                g_gsa_gal_mono = now_m;
+            }
+        }
+        return 0;
+    }
+    if (is_gga) {
+        /* $--GGA,hhmmss.ss,lat,N,lon,E,quality,numsat,... — receiver fix
+           status for the web panel only; never an anchor.  Talker-agnostic
+           like RMC/ZDA above ($BDGGA/$GPGGA/$GNGGA all match). */
+        char q[16];
+        if (getnth(line, 6, q, sizeof(q)) == 0 && q[0]) {
+            g_rx_fix = atoi(q);
+        }
+        if (getnth(line, 7, q, sizeof(q)) < 0) return 0;
+        if (q[0]) {
+            g_rx_sats = atoi(q);
+            g_gga_mono = now_mono_ns();
+        }
+        return 0;
+    }
     if (!is_rmc && !is_zda) return 0;
 
     int hh = 0, mi = 0, ss = 0, dd = 0, mo = 0, yr = 0;
@@ -468,7 +569,7 @@ static void emit_sample(time_t S, long long e_mono, int *sampled) {
 static void status_update(void) {
     if (!status_enabled) return;
     static int dir_done = 0;
-    char tmp[160], buf[512];
+    char tmp[160], buf[640];
     long long now_m = now_mono_ns();
     long long age = last_sample_mono ? (now_m - last_sample_mono) / 1000000000LL : -1;
     /* per-second clock divergence: realtime vs MONOTONIC_RAW since the last
@@ -511,13 +612,51 @@ static void status_update(void) {
         "anchor_seq=%d\n"
         "consec_gated=%d\n"
         "forced_resets=%d\n"
-        "reset_state=%s\n",
+        "reset_state=%s\n"
+        "fix=%d\n"
+        "sats=%d\n"
+        "sats_age_s=%lld\n",
         tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
         tm.tm_hour, tm.tm_min, tm.tm_sec,
         (age >= 0 && age <= 3) ? 1 : 0,
         age, last_off_us, anchor_fresh,
         sec_gated, sec_noedge, sec_noanchor, sec_badtod, diag,
-        anchor_seq, strike, forced_resets, reset_capped ? "CAPPED" : "OK");
+        anchor_seq, strike, forced_resets, reset_capped ? "CAPPED" : "OK",
+        g_rx_fix, g_rx_sats,
+        g_gga_mono ? (now_m - g_gga_mono) / 1000000000LL : -1);
+    /* per-constellation counts from GSA: write every constellation, but a
+       system whose GSA stopped arriving (single-constellation mode, e.g.
+       receiver switched to GPS-only) reports -1 so the web UI shows "—". */
+    {
+        char *p2 = buf + n;
+        size_t left = sizeof(buf) - (size_t)n;
+        size_t add = 0;
+        add = (g_gsa_gps_mono && now_m - g_gsa_gps_mono < 3000000000LL)
+                  ? (size_t)snprintf(p2, left, "sats_gps=%d\n", g_sats_gps)
+                  : (size_t)snprintf(p2, left, "sats_gps=-1\n");
+        if (add < left) { p2 += add; left -= add; }
+        add = (g_gsa_bds_mono && now_m - g_gsa_bds_mono < 3000000000LL)
+                  ? (size_t)snprintf(p2, left, "sats_bds=%d\n", g_sats_bds)
+                  : (size_t)snprintf(p2, left, "sats_bds=-1\n");
+        if (add < left) { p2 += add; left -= add; }
+        add = (g_gsa_glo_mono && now_m - g_gsa_glo_mono < 3000000000LL)
+                  ? (size_t)snprintf(p2, left, "sats_glo=%d\n", g_sats_glo)
+                  : (size_t)snprintf(p2, left, "sats_glo=-1\n");
+        if (add < left) { p2 += add; left -= add; }
+        add = (g_gsa_gal_mono && now_m - g_gsa_gal_mono < 3000000000LL)
+                  ? (size_t)snprintf(p2, left, "sats_gal=%d\n", g_sats_gal)
+                  : (size_t)snprintf(p2, left, "sats_gal=-1\n");
+        if (add < left) { p2 += add; left -= add; }
+        add = (g_gsa_qzss_mono && now_m - g_gsa_qzss_mono < 3000000000LL)
+                  ? (size_t)snprintf(p2, left, "sats_qzss=%d\n", g_sats_qzss)
+                  : (size_t)snprintf(p2, left, "sats_qzss=-1\n");
+        if (add < left) { p2 += add; left -= add; }
+        add = (g_gsa_sbas_mono && now_m - g_gsa_sbas_mono < 3000000000LL)
+                  ? (size_t)snprintf(p2, left, "sats_sbas=%d\n", g_sats_sbas)
+                  : (size_t)snprintf(p2, left, "sats_sbas=-1\n");
+        (void)add;
+        n = (int)strlen(buf);
+    }
     snprintf(tmp, sizeof(tmp), "%s.tmp", status_path);
     int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (fd >= 0) {

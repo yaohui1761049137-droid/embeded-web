@@ -1713,12 +1713,23 @@ function renderNicPanel(nic) {
         var qv = (n['valid_' + monWinSfx] !== undefined) ? n['valid_' + monWinSfx] : n.valid;
         var qr = (n['rsp_'   + monWinSfx] !== undefined) ? n['rsp_'   + monWinSfx] : n.rsp;
         var rate = q > 0 ? Math.round(qr * 100 / q) : null;
-        var style = '';
-        if (rate !== null && rate < 95) style = (rate >= 80) ? ' style="color:#b8860b"' : ' style="color:#c0392b"';
+        var rateTxt = '—', style = '';
+        if (rate !== null) {
+            /* replies are attributed to the second the iptables counter was
+               READ (1s poll), requests to the second they arrived — at a
+               window edge one reply can land in this window while its
+               request sits in the previous one, so the ratio transiently
+               reads >100%.  Clamp the display instead of alarming. */
+            if (rate > 100) rateTxt = '≈100%';
+            else {
+                rateTxt = rate + '%';
+                if (rate < 95) style = (rate >= 80) ? ' style="color:#b8860b"' : ' style="color:#c0392b"';
+            }
+        }
         var cl = (nic.clients && nic.clients[n.name]) ? nic.clients[n.name].length : 0;
         rows += '<tr><td>' + n.name + '</td><td>' + fmtNum(q) + '</td><td>' + fmtNum(qv) +
-                '</td><td>' + fmtNum(qr) + '</td><td' + style + '>' +
-                (rate === null ? '—' : rate + '%') + '</td><td>' + cl + '</td></tr>';
+                '</td><td>' + fmtNum(qr) + '</td><td' + style + '>' + rateTxt +
+                '</td><td>' + cl + '</td></tr>';
     });
     tbody.innerHTML = rows ||
         '<tr><td colspan="6" class="placeholder-text" style="padding:1.5rem">无数据</td></tr>';

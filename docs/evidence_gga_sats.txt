@@ -1,0 +1,46 @@
+=== GGA 锁定星数上线 + 图表 Y 轴修复（2026-09-22） ===
+
+【改动 1：授时 tab 增加接收机定位/锁定星数】
+链路: pps_tod.c 解析 $GxGGA → /run/pps_tod/status 增三行 → timesync.cgi
+emit_kv_file 自动透传 → control_panel.html 授时 tab 两行新显示。
+
+板端部署记录 (deploy/deploy_gga.sh):
+  - 备份: /usr/local/bin/pps_tod.bak-pre-gga (秒级回滚)
+  - 板上重编译 (gcc -O2 -Wall, 不接管道), stop pps_tod+watchdog → 换二进制 → start
+  - 服务状态: pps_tod active / pps_tod_watchdog active / chrony active
+  - 授时无回归: chronyc sources 仍 #* PPS, offset -37µs, reach 376
+
+状态文件新字段实测 (/run/pps_tod/status):
+  fix=7            ← GGA 定位质量码 (UT986 报 7, 非标准 NMEA 码, 前端映射为 定位有效(码7))
+  sats=27 → 30     ← 在用卫星数 (实时变化)
+  sats_age_s=0     ← GGA 数据年龄 (秒, >10 判过期显示)
+
+timesync JSON 实测 (带会话):
+  login 302 → main.cgi; /cgi-bin/timesync.cgi?action=status →
+  pps_tod 对象: fix=7 sats=30 sats_age_s=0 good=1; watchdog mode=OK
+
+服务端页面校验 (deploy/check_served_page.py): 6/6 ALL-PASS
+  fmtNum 小数修复 / ts-rx-fix / ts-rx-sats / renderTimesync 读 sats /
+  码7映射 / sats_age_s 过期守卫
+
+【改动 2：监控图 Y 轴刻度修复】
+根因: fmtNum() 的 Math.round 把 1 分钟视图的小数刻度 (0.5/1.5/1.33)
+取整成重复的 2/2/2/1/1/1。修复: 子 100 的分数值保留 1 位小数 (1.5/0.5)。
+本地 control_panel.html 已包含该修复 (fmtNum 头部 if (v<100 && v!==Math.round(v))),
+随本次一并部署到板端。
+
+【浏览器视觉验证受阻说明】
+ZCode 内置浏览器对自签证书无旁路 (ERR_CERT_AUTHORITY_INVALID),
+仅 IAB 后端可用、无 CDP headless; 拦截页 DOM 不可交互。
+视觉确认由用户在本地浏览器强刷 (Ctrl+F5) 完成。
+
+【附带发现: 密码 90 天有效期的假象】
+密码修改时间戳存于板卡假时钟时代 (2019-02-14 epoch); 板卡时钟锁定接收机时间
+跳变 +7.6 年后, 密码被判为早已过期 → 用户次日登录被强制改密。
+这是 ADR-0002「到期判定依赖板载时钟」风险的又一实证 (与项目文档记载一致)。
+当前面板凭据: root / Testpassword1234@@ (用户自行设置)。
+
+【源码版本】
+  pps_tod.c (含 GGA 解析) 新 md5: c1de6953c1b95d519f168b478df602d1
+  旧版备份: PPS_TOD/pps_tod.c.pre-gga-20260922 (md5 58e2bdc9, µs 级验证版)
+  板上回滚二进制: /usr/local/bin/pps_tod.bak-pre-gga

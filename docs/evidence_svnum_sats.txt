@@ -1,0 +1,55 @@
+=== 按系统锁定星数上线（$SVNUM 厂商句，2026-09-22） ===
+
+【背景】
+用户要求把锁定星数挪到「UT986 接收机工作模式」面板、接收机模式行下方，
+并显示 GPS/北斗等按系统细分。
+
+【串口数据排查（deploy/nmea_capture.sh 原始抓包）】
+UT986 每秒输出 4 句: $TIMTP / $GNGGA / $GNRMC / $SVNUM —— 没有 GSA/GSV。
+$SVNUM 为厂商句（UT986_GNSS Timing Products Protocol Specification 表 1-56，
+"各个系统的搜星数"）:
+  $SVNUM,gps,,bds,,gal,,glo,,qzss,,sbas,rsv*cs
+  （星数在奇数 getnth 位 1/3/5/7/9/11，偶数位为频点预留空位）
+实测 $SVNUM,8,,15,,6,,2,,2,,0,*69 = GPS 8 / 北斗 15 / Galileo 6 /
+GLONASS 2 / QZSS 2 / SBAS 0，合计 33 与 $GNGGA 的在用总数一致。
+另注: 协议还有 $TSVNUM（各系统参与授时的卫星位掩码），可作为后续增强。
+
+【实现】
+  pps_tod.c:
+  - $SVNUM 分支（$--GSA 分支保留作通用路径）：六系统计数逐秒覆盖写
+    g_sats_gps/bds/gal/glo/qzss/sbas + 单调钟时间戳
+  - status_update 追加 sats_gps/bds/gal/glo/qzss/sbas 六行，3s 新鲜度窗口，
+    未播报的系统写 -1（前端显示 —）；status 缓冲 512→640
+  - 时序路径（emit_sample/shm/gpio 配对）零改动
+  control_panel.html:
+  - 「锁定星数」行从授时状态表移至接收机模式面板、模式行下方
+  - 渲染: 33 ★（GPS 8 / 北斗 15 / Galileo 6 / GLONASS 2 / QZSS 3 / SBAS 0）
+    （顺序跟 $SVNUM 字段序；-1 显示 —；sats_age_s>10s 显示数据过期）
+
+【部署验证】
+  服务状态: pps_tod / pps_tod_watchdog / chrony 全 active
+  授时无回归: #* PPS, offset -35µs, reach 376
+  状态文件实测: sats=34, sats_gps=6 sats_bds=15 sats_glo=6
+               sats_gal=4 sats_qzss=3 sats_sbas=0 (6+15+6+4+3+0=34=GGA ✓)
+  timesync JSON 带会话: fix=7 sats=33 sats_age_s=0 good=1, watchdog OK
+  服务端页面校验: 6/6 ALL-PASS
+  星数实时变化: 33 → 32 → 34（跟踪动态正常）
+  布局: 锁定星数已在接收机模式面板（用户截图确认位置意图）
+
+【源码版本】
+  pps_tod.c (含 GGA + SVNUM 解析) md5: 3fb353eb8b77089179d90103fef20fb1
+  上一版 (仅 GGA): c1de6953… (备份 pps_tod.c.pre-gga-20260922 为 µs 验证版 58e2bdc9…)
+  板上回滚二进制: /usr/local/bin/pps_tod.bak-pre-gga (保留为最初的 µs 验证版)
+
+【补充 2026-09-22: 应答率 >100% 的成因与前端 clamp】
+  现象: 各网口表格 应答率 102% (应答 43 > 请求 42)。
+  根因 (ntp_nic_monitor.c 代码级确认): 两个计数器归因时刻不同——
+  请求走 AF_PACKET 逐包实时记账(到达那秒/分钟, capture_drain),
+  应答取 iptables OUTPUT 计数器差值, 记入"计数器被读到的那一分钟"
+  (poll_responses 的 1 秒轮询) → 应答记账滞后最多 1 秒,
+  分钟边界处一对请求/应答被切进相邻窗口 → 偶发 +1 → 102%,
+  下一窗口对称回补, 非数据错误。
+  处理 (用户选定方案): renderNicPanel 前端 clamp——
+  原始 rate>100% 时显示 "≈100%" (标注边界效应), 着色告警只用于真实数值;
+  代码注释写明成因。esprima 整页语法检查 SYNTAX-OK 后部署,
+  check_clamp.py 确认板端已服务该分支。
