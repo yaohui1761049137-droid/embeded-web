@@ -344,6 +344,7 @@ if (!document.cookie.match(/csrf_token=/)) {
 <tr><td class="config-label">PPS 当前偏移 (offset_us)</td><td class="config-value" id="ts-offset-us">—</td></tr>
 <tr><td class="config-label">最近合格样本 (s)</td><td class="config-value" id="ts-last-good">—</td></tr>
 <tr><td class="config-label">门控计数 (sec_gated)</td><td class="config-value" id="ts-gated">—</td></tr>
+<tr><td class="config-label">接收机定位</td><td class="config-value" id="ts-rx-fix">—</td></tr>
 <tr><td class="config-label">状态文件新鲜度</td><td class="config-value" id="ts-pps-fresh">—</td></tr>
 <tr><td class="config-label">看门狗</td><td class="config-value" id="ts-wd">—</td></tr>
 <tr><td class="config-label">更新时间</td><td class="config-value" id="ts-updated">—</td></tr>
@@ -366,6 +367,10 @@ if (!document.cookie.match(/csrf_token=/)) {
 <label><input type="radio" name="rx-mode" value="gal"> Galileo</label><br>
 <label><input type="radio" name="rx-mode" value="glo"> GLONASS</label>
 </td>
+</tr>
+<tr>
+<td class="config-label">锁定星数</td>
+<td class="config-value" id="ts-rx-sats">—</td>
 </tr>
 </table>
 <p class="tab-status" id="rx-mode-current">当前模式：读取中...</p>
@@ -1126,12 +1131,50 @@ function renderTimesync(r) {
         tsSet('ts-offset-us', p.offset_us !== undefined && p.offset_us !== '' ? p.offset_us + ' µs' : '—');
         tsSet('ts-last-good', p.last_good_age_s);
         tsSet('ts-gated', p.sec_gated);
+        /* receiver fix/satellite count via $--GGA (pps_tod ≥ gga version);
+           per-constellation counts via $--GSA (sats_gps/bds/glo/gal, -1 = not
+           currently reported, e.g. single-constellation mode) */
+        var FIX_TEXT = { '0': '无定位', '1': '定位有效', '2': '差分定位',
+                         '3': 'PPS 定位', '4': 'RTK 固定', '5': 'RTK 浮点',
+                         '6': '估计模式', '7': '定位有效 (码 7)', '8': '仿真模式' };
+        var satsAge = parseInt(p.sats_age_s, 10);
+        var stale = satsAge > 10;                 /* no GGA for >10s: stale */
+        tsSet('ts-rx-fix', p.fix === undefined || p.fix === '' || p.fix === '-1'
+            ? '— (未收到 GGA)'
+            : (FIX_TEXT[p.fix] || (parseInt(p.fix, 10) >= 1
+                ? '定位有效 (码 ' + p.fix + ')' : '未知 (' + p.fix + ')')));
+        /* 锁定星数 rendered in the UT986 receiver-mode panel.  Per-
+           constellation counts come from UT986's vendor sentence $SVNUM
+           (protocol spec 表 1-56; GPS/BDS/Gal/GLONASS/QZSS/SBAS in that
+           sentence order); standard $--GSA also feeds the same keys when
+           present.  -1 = not currently reported → "—". */
+        var rxSats = document.getElementById('ts-rx-sats');
+        if (rxSats) {
+            var perC = [['sats_gps', 'GPS'], ['sats_bds', '北斗'],
+                        ['sats_gal', 'Galileo'], ['sats_glo', 'GLONASS'],
+                        ['sats_qzss', 'QZSS'], ['sats_sbas', 'SBAS']]
+                .map(function (kv) {
+                    var n = parseInt(p[kv[0]], 10);
+                    return n >= 0 ? kv[1] + ' ' + n : kv[1] + ' —';
+                });
+            if (p.sats === undefined || p.sats === '' || p.sats === '-1') {
+                rxSats.textContent = '— (未收到 GGA)';
+            } else if (stale) {
+                rxSats.textContent = p.sats + ' ★ (数据过期 ' + satsAge + 's)';
+            } else if (p.sats === '0') {
+                rxSats.textContent = '0 ★ (无定位)';
+            } else {
+                rxSats.textContent = p.sats + ' ★（' + perC.join(' / ') + '）';
+            }
+        }
         tsSet('ts-pps-fresh', p.age_s <= 5 ? '新鲜' : '过期 (' + p.age_s + 's)');
     } else {
         tsSet('ts-good', '状态文件不可用');
         tsSet('ts-offset-us', '—');
         tsSet('ts-last-good', '—');
         tsSet('ts-gated', '—');
+        tsSet('ts-rx-fix', '—');
+        tsSet('ts-rx-sats', '—');
         tsSet('ts-pps-fresh', '—');
     }
 
@@ -1367,8 +1410,13 @@ function markMonRange() {
 var ethInfo = { names: [], total: [], hour: [] };
 
 /* compact number for axis/bar labels: 1234 → "1234", 27000 → "2.7万",
-   312500000 → "3.1亿" — keeps long labels short under heavy load */
+   312500000 → "3.1亿" — keeps long labels short under heavy load.
+   Sub-100 fractional values (per-second rates in the 1m view: 0.5, 1.5)
+   keep one decimal — Math.round would collapse every tick to the same
+   integer and the axis reads as a row of identical numbers. */
 function fmtNum(v) {
+    if (v < 100 && v !== Math.round(v))
+        return (Math.round(v * 10) / 10).toFixed(1).replace(/\.0$/, '');
     v = Math.round(v);
     if (v >= 100000000) return (v / 100000000).toFixed(1).replace(/\.0$/, '') + '亿';
     if (v >= 10000) return (v / 10000).toFixed(1).replace(/\.0$/, '') + '万';
