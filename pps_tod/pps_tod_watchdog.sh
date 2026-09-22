@@ -81,7 +81,55 @@ write_state() {
         echo "last_action=$last_action"
         echo "observe_until=$observe_until"
         echo "strikes=$strikes"
+        echo "ntp_serving=$ntp_state"
     } > "$STATE.tmp" 2>/dev/null && mv "$STATE.tmp" "$STATE" 2>/dev/null
+}
+
+# NTP serving guard (Plan A): while the sync chain cannot produce GOOD
+# samples, the board's clock is not vouched for, and a Stratum-1 server must
+# not answer.  chrony 3.4 has no `disable ntp`, so the runtime ACL is used
+# instead: `chronyc deny all` stops serving (verified: clients time out), and
+# recovery re-asserts the allow list from acl-web.conf (chrony runtime ACL is
+# last-match-wins).  Transition-guarded with a 10s retry throttle, gated by
+# NTP_GUARD, and belief-synced on the first OK pass (covers a watchdog death
+# while disabled).  While DEGRADED the deny is re-asserted every alert pass,
+# so a chronyd restart mid-DEGRADED cannot silently re-open serving.
+CHRONY_ACL_CONF=${CHRONY_ACL_CONF:-/etc/chrony/acl-web.conf}
+ntp_state=unknown
+last_ntp_try=0
+ntp_serve() {  # ntp_serve on|off [force]
+    [ "${NTP_GUARD:-1}" = 1 ] || return 0
+    want=$1; force=${2:-}
+    if [ "$force" != force ]; then
+        [ "$ntp_state" != "$want" ] || return 0
+        # retry throttle for the transition attempt only; the DEGRADED force
+        # re-assert must NOT touch this clock or it would starve recovery
+        [ $(( $(date +%s) - last_ntp_try )) -ge 10 ] || return 0
+        last_ntp_try=$(date +%s)
+    fi
+    if [ "$want" = off ]; then
+        if chronyc deny all >/dev/null 2>&1; then
+            log "NTP serving DISABLED (no GOOD sample; board stops answering NTP until the reference recovers)"
+            ntp_state=off
+        else
+            log "chronyc deny all FAILED (chronyd unreachable?)"
+        fi
+    else
+        rc=0
+        if [ -f "$CHRONY_ACL_CONF" ]; then
+            for sub in $(awk '$1 == "allow" && NF >= 2 {print $2}' "$CHRONY_ACL_CONF"); do
+                chronyc allow "$sub" >/dev/null 2>&1 || rc=1
+            done
+        else
+            rc=1
+        fi
+        if [ "$rc" = 0 ]; then
+            log "NTP serving ON (GOOD samples flowing; serving ACL re-asserted)"
+            ntp_state=on
+        else
+            log "NTP serving re-enable FAILED ($CHRONY_ACL_CONF missing or chronyc error)"
+        fi
+    fi
 }
 
 # Operational/test entry point: apply the cap once and exit.  Keeps prune_log
@@ -114,6 +162,7 @@ while :; do
         mode=OK
         bad_since=0
         observe_until=0
+        ntp_serve on
     else
         case "$mode" in
         OK)
@@ -143,6 +192,7 @@ while :; do
                             mode=DEGRADED
                         else
                             mode=RECOVERING
+                            ntp_serve off   # recovering: do not vouch for the clock
                         fi
                     fi
                 fi
@@ -155,13 +205,17 @@ while :; do
             fi
             ;;
         DEGRADED)
+            ntp_serve off force   # re-assert: a chronyd restart must not re-open serving
             if [ $((now - last_alert)) -ge "$ALERT_INTERVAL" ]; then
                 last_alert=$now
-                log "DEGRADED: still no GOOD sample; check PPS/TOD wiring or receiver (restart will not help). Manual reset: systemctl restart pps_tod-watchdog"
+                log "DEGRADED: still no GOOD sample; NTP serving disabled until recovery. Check PPS/TOD wiring, receiver, or power-cycle the board. Manual reset: systemctl restart pps_tod-watchdog"
             fi
             ;;
         esac
     fi
+    # All DEGRADED entry points converge here: the board must not serve time
+    # it cannot vouch for.
+    [ "$mode" = DEGRADED ] && ntp_serve off
     write_state
     sleep 1
 done

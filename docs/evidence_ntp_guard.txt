@@ -1,0 +1,45 @@
+=== 方案 A：参考丢失时停止 NTP 应答（NTP serving guard，2026-09-22） ===
+
+【需求】
+死窗口期间板卡曾以 2019 假时间应答 NTP（客户端校到 -7.6 年）——补上
+"板卡时间不可信时停止对外应答" 的机制（chrony 3.4 无 disable ntp 命令）。
+
+【实现（pps_tod_watchdog.sh v-plan-a）】
+机制: chrony 3.4 运行时 ACL——DEGRADED/RECOVERING 时 `chronyc deny all`
+（板卡停止应答 123 端口），恢复时从 /etc/chrony/acl-web.conf 重放 allow
+（chrony 运行时 ACL 为 last-match-wins，实测验证）。
+状态机挂钩:
+  - 重启成功 → RECOVERING → 立即停答（不为自己不能担保的时钟作保）
+  - 三个 DEGRADED 入口（观察超时/重启失败/超次数）统一兜底停答
+  - 恢复（is_good）→ 重放 ACL 使能，日志 "NTP serving ON"
+  - DEGRADED 期间每秒 force 重申 deny（防 chronyd 重启后悄悄重新开放）
+  - belief 同步: 看门狗启动后首个 OK 帧重申一次 ACL（覆盖"看门狗死在
+    disabled 态"的情况）；转换尝试带 10s 重试节流
+  - 配置开关 NTP_GUARD=1（conf 可关，维护窗口设 0）
+  - watchdog.state 新增 ntp_serving=on/off/unknown（经 timesync.cgi 自动透传，
+    面板看门狗行将来可直接显示）
+  - DEGRADED 告警文案更新: "NTP serving disabled until recovery...
+    or power-cycle the board"
+
+【部署验证（闭环实测，隔离快速测试实例，真实看门狗全程不受扰）】
+  测试实例（快速 conf: grace 3s / window 5s / observe 8s）+ 模拟死档:
+  阶段1: restart → "NTP serving DISABLED" → RECOVERING → DEGRADED，
+         ntp_serving=off；PC 实测 w32tm 超时(0x800705B4)×2 ✓ 停答生效
+  阶段2: 喂合格假状态 → "recovered (was DEGRADED)" → "NTP serving ON
+         (serving ACL re-asserted)"，ntp_serving=on；PC 实测恢复应答
+         (+148µs / -510µs) ✓ 恢复生效
+  真实看门狗全程 mode=OK ntp_serving=on，服务三件套 active。
+
+【过程中发现并修复的两个 bug】
+  1. chrony 3.4 的 chronyc 无 `disable ntp`（4.0 才有）→ "Unrecognized
+     command"；改用运行时 ACL 机制。
+  2. 节流时间戳被 force 路径每秒刷新，把恢复路径的 10s 重试节流永远顶住
+     → 实例被杀时 chrony 停留在 deny 态（PC 持续超时）。修复: force 不更新
+     节流时钟；手动 allow 恢复服务后重新部署。
+  3.（测试 conf）STALE_MAX 缺失导致 is_good 恒 false——测试 harness 的
+     conf 必须含全部键。
+
+【当前状态】
+  看门狗: v-plan-a 已部署（sh -n 校验过），ntp_serving=on
+  chrony: 正常对外服务（PC stripchart +148µs / -510µs，µs 级）
+  配置: /etc/pps_tod/pps_tod_watchdog.conf NTP_GUARD=1
