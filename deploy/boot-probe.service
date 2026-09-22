@@ -1,0 +1,11 @@
+[Unit]
+Description=Boot evidence probe for intermittent low-speed-IO power-up failure
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/boot_probe.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

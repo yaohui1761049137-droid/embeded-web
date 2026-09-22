@@ -37,21 +37,20 @@ deploy\
   fix_crlf_and_start.sh                      ← Step8b 修 CRLF 行尾并启动
   verify_login.py                            ← Step4 登录全流程验证
   verify_functions.py                        ← Step6 功能 12 步验证
-PPS_TOD 源码（已收进本仓库 `pps_tod\`，10 个文件）
-  pps_tod.c + watchdog.sh/.conf/.service + rtc_save.sh/.service/.timer
-  + sanitize-drift.sh/.service + chrony-restart.conf
-src\ + www\ + config\                        ← 项目源码 / 前端 / lighttpd 配置（仓库自带）
+PPS_TOD（不在本仓库！）
+  C:\Users\YAO\Desktop\codex_store\PPS_TOD\
+  pps_tod.c 等 10 个文件（WSL 侧 /mnt/c/.../PPS_TOD/）
+src.tar.gz + embeded-web-main\               ← 项目源码（本仓库已打包/解压）
 ```
 
-⚠️ `PPS_TOD` 授时栈源码**已收进本仓库 `pps_tod\`**（2026-09-21 入库；此前只存在于
-PC 的 `C:\Users\YAO\Desktop\codex_store\PPS_TOD\`，是第一次部署最容易卡的点）。
-主源码 `pps_tod.c` 为修复后最终版，本仓库 LF 版 md5 = `3f25f24c553094e04f17b01d9bc60a87`
-（历史 CRLF 原版 md5 `58e2bdc9d1d7fe35a198e0ed4e7f5987`，功能相同；目录里另有
-`pps_tod.c.orig-20260917` 是修复前备份，**别拿错**）。
+⚠️ `PPS_TOD` 源码**不在 GitHub 仓库也不在本仓库**，在 PC 的
+`C:\Users\YAO\Desktop\codex_store\PPS_TOD\`——这是第一次部署最容易卡的点。
+主源码 `pps_tod.c` 当前版 md5 = `3fb353eb8b77089179d90103fef20fb1`
+（2026-09-22 版：$GxGGA 定位质量 + $SVNUM 各系统星数解析，供面板显示；
+历史版本：`pps_tod.c.pre-gga-20260922` 是加 GGA 前、µs 级验证过的版本
+md5 `58e2bdc9…`；更早的 `pps_tod.c.orig-20260917` 是修复前备份，**别拿错**）。
 
 ### 0.4 离线 deb 的精确下载地址（archive.debian.org，PC 执行）
-
-**4 个 deb 已随仓库附带在 `debs\`，可直接用**；需要重新下载时用以下地址：
 
 ```
 https://archive.debian.org/debian/pool/main/x/xxhash/libxxhash0_0.8.0-2~bpo10+1_arm64.deb
@@ -70,7 +69,7 @@ Buster 已进归档区，`deb.debian.org` 上没有 buster-backports，别找错
 |---|---|
 | 板卡 SSH | `root@192.168.1.111`，密码 `root` |
 | Web 面板 | `https://192.168.1.111`（自签证书，浏览器/curl 加 `-k`） |
-| 面板管理员（最终） | `root` / `Testpassword1234@` |
+| 面板管理员（最终） | `root` / `Testpassword1234@@`（2026-09-21 用户自行改密，双 @ 结尾） |
 | 面板初始密码（首登强制改密，用完即失效） | `root` / `admin` |
 | 板上关键路径 | `/home/www`（前端+`cgi-bin/`）、`/var/db/myapp.db`、`/etc/lighttpd/`、`/usr/local/bin/`、`/run/pps_tod/`、`/var/log/pps_tod/` |
 | 授时串口 | `/dev/ttyS7`（uart7-m1 overlay），PPS=`/dev/gpiochip3` line5 |
@@ -138,9 +137,9 @@ curl -k  --max-time 8 -o NUL -w "%%{http_code}" https://192.168.1.111/   ← 404
 （www 资产 scp 到的是 `/tmp/`）。**不要手打 README 那段，用本仓库脚本**：
 
 ```bat
-:: 在仓库根目录（git clone 下来的 embeded-web）
-tar czf src.tar.gz src
-scp -o BatchMode=yes src.tar.gz www\* root@192.168.1.111:/tmp/
+cd ..（回到工作区根目录）
+tar czf src.tar.gz -C embeded-web-main src
+scp -o BatchMode=yes src.tar.gz embeded-web-main\www\* root@192.168.1.111:/tmp/
 scp -o BatchMode=yes deploy\build_on_board.sh root@192.168.1.111:/tmp/
 ssh -o BatchMode=yes root@192.168.1.111 "bash /tmp/build_on_board.sh"
 ```
@@ -184,6 +183,12 @@ ssh -o BatchMode=yes root@192.168.1.111 "systemctl disable --now systemd-time-wa
 **验收**：`INTEGRATION-OK`；lighttpd/chrony/ntp-nic-monitor/ntp-stats.timer 全 active；
 两个 sudoers 文件 `parsed OK`。
 
+**看门狗 NTP 服务守卫（2026-09-22 起内置）**：`pps_tod_watchdog.conf` 的
+`NTP_GUARD=1` 让看门狗在 DEGRADED/RECOVERING 时自动 `chronyc deny all`
+（板卡时间不可信时停止对外应答 NTP，避免客户端校到假时间），恢复后从
+`/etc/chrony/acl-web.conf` 重放 allow。维护时想手动停 chrony 服务就把
+NTP_GUARD 设 0。闭环实测见 `docs/evidence_ntp_guard.txt`。
+
 ## 8. Step6：功能全流程验证（12 步）
 
 ```bat
@@ -225,19 +230,15 @@ ssh -o BatchMode=yes root@192.168.1.111 "ls -l /dev/ttyS7"   ← crw-rw---- root
 
 （板上留有备份 `uEnv.txt.bak-before-uart7`，失败可还原。）
 
-### 10.2 部署 pps_tod 授时栈（源码在本仓库 `pps_tod\`，10 个文件）
+### 10.2 部署 pps_tod 授时栈（源码在 `C:\Users\YAO\Desktop\codex_store\PPS_TOD\`）
 
-**先核源码 md5**（防拿错 `.orig-20260917` 修复前备份；仓库 LF 版与历史 CRLF 版功能相同）：
-
-```bat
-certutil -hashfile pps_tod\pps_tod.c MD5
-:: 期望 3f25f24c553094e04f17b01d9bc60a87（本仓库 LF 版）
-:: 历史 CRLF 原版为 58e2bdc9d1d7fe35a198e0ed4e7f5987，二者功能相同
-```
+**先核源码 md5**（防拿错 `.orig-20260917` 修复前备份）：
+`pps_tod.c` 最终版 md5 = `58e2bdc9d1d7fe35a198e0ed4e7f5987`。
 
 ```bat
-:: 在仓库根目录
-scp -o BatchMode=yes pps_tod\pps_tod.c pps_tod\pps_tod_watchdog.sh pps_tod\pps_tod_watchdog.conf pps_tod\pps_tod_watchdog.service pps_tod\pps_tod_rtc_save.sh pps_tod\pps_tod_rtc.service pps_tod\pps_tod_rtc.timer pps_tod\sanitize-drift.sh pps_tod\sanitize-drift.service pps_tod\chrony-restart.conf root@192.168.1.111:/tmp/
+cd C:\Users\YAO\Desktop\codex_store\PPS_TOD
+scp -o BatchMode=yes pps_tod.c pps_tod_watchdog.sh pps_tod_watchdog.conf pps_tod_watchdog.service pps_tod_rtc_save.sh pps_tod_rtc.service pps_tod_rtc.timer sanitize-drift.sh sanitize-drift.service chrony-restart.conf root@192.168.1.111:/tmp/
+cd ..\without_HDMI_test
 scp -o BatchMode=yes deploy\install_timing_stack.sh root@192.168.1.111:/tmp/
 ssh -o BatchMode=yes root@192.168.1.111 "bash /tmp/install_timing_stack.sh"
 ssh -o BatchMode=yes root@192.168.1.111 "bash /tmp/fix_crlf_and_start.sh"
@@ -247,9 +248,9 @@ ssh -o BatchMode=yes root@192.168.1.111 "bash /tmp/fix_crlf_and_start.sh"
 本测试板必须显式 `-t /dev/ttyS7`（已在 install_timing_stack.sh 的 service 单元里写死）。
 GPIO 默认 `chip3 line5`＝GPIO3_A5，与接线一致，`-g` 可不传。
 
-**两个工具链坑（脚本已内置修复；仓库源码已统一 LF 行尾，正常情况下 fix 步骤只是兜底）**：
+**两个工具链坑（脚本已内置修复）**：
 
-- **CRLF 行尾**：源文件若被 Windows 编辑过，systemd spawn 报
+- **CRLF 行尾**：PPS_TOD 源文件在 Windows 上编辑过，systemd spawn 报
   `Failed at step EXEC ... No such file or directory`＝shebang 变 `/bin/sh\r`。
   `fix_crlf_and_start.sh` 统一 `sed 's/\r$//'` 清洗；
 - **`gcc 2>&1 | head -5` 吞退出码**：head 提前关管道 gcc 被 SIGPIPE 杀死，二进制不落地。

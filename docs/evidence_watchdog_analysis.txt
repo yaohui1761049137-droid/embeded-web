@@ -1,0 +1,77 @@
+=== 看门狗与无法授时窗口分析（2026-09-21） ===
+
+【时间线重建（watchdog.log，时间戳=板卡时钟，死窗口期板卡时钟为假时间 2019-02-14）】
+
+部署启动(板卡假时钟 2019-02-15):
+  15:23:35 watchdog started
+  15:25:05 no GOOD sample for 30s -> restart pps_tod        ← 有界重启(执行过)
+  15:26:05 no GOOD within 60s after restart -> DEGRADED
+  (2026-09-21) 11:31:27 coarse step +239,745,897s(2019→2026 真实时间), 11:31:29 recovered
+  → 即: 用户接上 UT986 后 2 秒内看门狗自动宣布恢复
+
+死窗口启动(用户断电重启, 假时钟 2019-02-14 18:12 起, 对应真实 ~17:00 前后):
+  18:12:01 watchdog started
+  18:13:31 no GOOD sample for 30s -> restart pps_tod        ← 看门狗重启过一次
+  18:14:31 no GOOD within 60s after restart -> DEGRADED (reference lost? wiring?)
+  18:14:32 ~ 18:25:33  每 60s 一条 DEGRADED:
+    "still no GOOD sample; check PPS/TOD wiring or receiver (restart will not help)"
+  同期 /run/pps_tod/status: n=0 tod_n=0 noedge=0 noanchor=0 good=0 —— PPS 边沿与 TOD 报文双双为零
+  同期 chronyd 仍在 123 口应答 NTP, 内容=2019 假时间(客户端见 -7.6 年偏移)
+
+当前启动(2026-09-21 17:14:22, 板卡开机即真实时间, /dev/rtc0 hwclock -r 读到 2026-09-21 17:23 实时):
+  17:14:22 pps_tod start: gpio=3:5 tod=/dev/ttyS7
+  第一个 60s 窗口: n=61 tod_n=61 (PPS/TOD 100% 配对), offset µs 级
+  无 coarse step(forced_resets=0) —— 开机时钟即正确
+  status: good=1 offset_us≈34, sources #* PPS, System time 1.4µs
+
+【两次启动的差异】
+  板侧软件栈完全一致(同一套服务/配置); 唯一差异 = 接收机信号链:
+  死窗口: PPS 边沿 0 个 + TOD 0 句 —— 接收机整个窗口无输出(断电/未接/未锁星)
+  本次:   开机即 61 边沿/61 句 —— 接收机恢复输出
+  修正后的完整样本时间轴(单文件 STAT ts 序列):
+    11:32~15:35 连续(锁定的那次运行) → 【断档:用户拔电 + 死窗口,其 STAT 写入
+    2019-02-14 文件后丢失(gz 损坏 0 字节)】 → 17:15~至今连续(本次启动)
+  附注: 死窗口的逐行日志不可恢复——journald 非持久化, 且当日(2019-02-14)日志文件
+        在时钟跳变轮转时损坏(pps_tod_2019-02-14.log.gz 0 字节, unexpected EOF);
+        仅 watchdog.log 完整留存(文件写入, 不依赖 journald)。
+
+【看门狗为什么"没有主动重启"——实际上重启了, 且行为符合设计】
+  1. 它在 18:13:31 按 GOOD_WINDOW=30s 触发了重启(有界重启, 每小时上限 3 次);
+  2. 重启后 OBSERVE_GRACE=60s 内仍无 GOOD → 判定"参考丢失"(参考丢失=物理层问题,
+     重启守护进程无济于事) → 按设计转入 DEGRADED 告警模式, 不再重启, 防重启风暴;
+  3. 告警落点: watchdog.log 每 60s 一条 + /run/pps_tod/watchdog.state(mode=DEGRADED,
+     面板授时 tab 可见); 死窗口共 12 条 DEGRADED。
+  4. 事后验证其判断正确: 本次启动零改动(同一守护进程、同一线路配置)即锁定成功,
+     说明守护进程本身无故障, 重启循环确实救不了物理层断链。
+
+【用户疑问的正面回答: "拔电才正常, 看门狗没问题吗?"】
+  拔电修的是接收机(及共用电源的物理层), 看门狗能触达的只有板卡软件层——
+  这两层是不同的东西。看门狗重启 pps_tod 时(日志 18:13:31)接收机仍然静默,
+  60s 观察窗零样本证明软件重启无效; 你拔电恢复的是接收机供电/接线/锁星状态。
+  结论: 看门狗行为符合设计且判断正确, 但它确实"修不了"这一层——这是设计边界,
+  不是故障。若接收机供电可控(板卡 40pin 供电+GPIO 控 MOS), 可增加第三层自愈:
+  DEGRADED 持续 N 分钟后由看门狗自动对接收机断电重启(把"拔电"自动化)。
+
+【最终结论修正（用户澄清后）：接收机全程无恙，坏的是板卡侧 IO 域】
+  用户确认: 两次故障期间从未动过接收机(接收机独立电源), 仅对板卡断电重启;
+  手机时间=板卡/PC=19:24, 即接收机 TOD 的绝对时间是正确的。
+  → 推翻"接收机静默"假设。真正根因:
+    板卡上电后 GPIO3 I/O 域处于失效态——PPS(GPIO3_A5) 与 UART7_M1 RX(GPIO3_C5)
+    两个信号都走 GPIO3 bank 焊盘, 同一 bank 失效 → 边沿与报文同时归零;
+    且该次上电 RTC 读取同样失败(开机假时间 2019-02-14 即是旁证)。
+    看门狗重启守护进程重新 open 全部设备仍零样本(域是死的, 重开没用);
+    整板断电重新初始化 IO 域后恢复。
+  好启动佐证: pin 101 (gpio3-5) 已被 pps_tod 认领(gpio3:101), hwclock -r 读到真实时间。
+  判定: 这与板卡物理损伤主题吻合——低速率 IO 域(GPIO3/RTC)存在"上电偶发失效",
+  概率性、断电重掷。属本次测试第三个硬件级异常(前两个: SSH 主机密钥损坏、
+  4 个 libmali 库截断)。
+  看门狗改进点(+1): DEGRADED 告警文案应改为"check PPS/TOD wiring, receiver, or
+  POWER-CYCLE THE BOARD(整板断电重启)"——本次场景下告警建议是误导的。
+  面板功能缺口(确认): 授时 tab 无接收机锁定星数/定位状态显示(timesync.cgi 只解析
+  $BDZDA 时间句, 不解析 $GxGGA), 需后续增强。
+
+
+【留档的两个改进点(未实施)】
+  a) DEGRADED 告警仅写 watchdog.log + watchdog.state, 无主动通知通道(面板 tab 需人工看);
+  b) 参考丢失期间 chrony 仍以假时间对 123 口服务(客户端校到 7.6 年前的假时间),
+     可考虑: 参考丢失时让 chrony 不应答/降 stratum 告警, 避免 NTP 客户端校到假时间。
