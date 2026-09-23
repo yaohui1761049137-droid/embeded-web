@@ -192,13 +192,34 @@ embeded_Lighttpd/
 
 ## 快速开始
 
-> **傻瓜式部署请直接照 [`docs/foolproof-deploy.md`](docs/foolproof-deploy.md) 执行**：
-> Step1–Step9 全流程、每一步的验收标准、失败对照与踩坑速查总表都在里面，
+### 一键部署（推荐，幂等可重跑）
+
+```bat
+pip install paramiko
+python deploy\deploy_all.py                    :: 全流程到功能验证（默认值见下）
+python deploy\deploy_all.py --with-timing      :: 含 Step9 授时链路（需 UT986 接线）
+python deploy\deploy_all.py --reboot --with-timing   :: 完整版（含断电重启复测）
+```
+
+- 默认参数：`--host 192.168.1.111 --user root --board-password root
+  --panel-password Testpassword1234@@`，换板卡/密码用 flags 覆盖。
+- **逐阶段幂等**：preflight → 离线依赖 → HTTPS → CGI 编译 → 面板密码 →
+  系统集成（含 time-wait-sync mask）→ 功能验证 12/12 →（可选）授时栈+守卫 →
+  （可选）重启复测；已部署的部分自动跳过，任一阶段失败即停并提示重跑，
+  重跑不会重复已完成的动作。全部复用仓库里已真机验证的板端脚本，
+  驱动只做编排与验收。
+- 首次部署会在面板密码阶段自动完成首登强制改密
+  （root/admin → 你指定的 `--panel-password`），结束时把密码记下来。
+- 2026-09-23 实机验证：已部署板重跑 7/7 阶段 PASS（全跳过 + 功能 12/12）。
+
+### 手动分步（兜底，Step1–Step9）
+
+> 每一步的验收标准、失败对照与踩坑速查总表见
+> [`docs/foolproof-deploy.md`](docs/foolproof-deploy.md)（Step1–Step9 全流程，
 > 2026-09-20/21 已在无 HDMI、无外网的鲁班猫 2N 上两次真机实测通过
-> （功能 12/12 + 断电重启自恢复 + 授时链路 µs 级锁定）。
-> 本节是速查版：所有命令在 PC（Windows）上 git clone 本仓库后直接粘贴。
-> 手册中的示例地址为 `root@192.168.1.111`，换板卡时全局替换 IP 即可
-> （`deploy/` 内 Python 脚本的 `HOST` 常量同改）。
+> ——功能 12/12 + 断电重启自恢复 + 授时链路 µs 级锁定）。
+> 手册示例地址 `root@192.168.1.111`，换板卡时全局替换 IP 即可。
+> 以下命令在 PC（Windows）上 git clone 本仓库后直接粘贴。
 
 ### 部署包（仓库自带，克隆即用，无需外网）
 
