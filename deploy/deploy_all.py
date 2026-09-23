@@ -329,6 +329,13 @@ def stage_timing(d, opt):
             return False
     d.upload(find_script("install_timing_stack.sh"))
     d.upload(find_script("fix_crlf_and_start.sh"))
+    # install_timing_stack.sh expects the pps_tod sources at /tmp/<name>
+    pt_dir = os.path.join(REPO, "pps_tod")
+    if os.path.isdir(pt_dir):
+        for f in sorted(os.listdir(pt_dir)):
+            p = os.path.join(pt_dir, f)
+            if os.path.isfile(p):
+                self_put = d.sftp.put(p, "/tmp/" + f)
     sh(d, "bash /tmp/deploy_all/install_timing_stack.sh 2>&1 | tail -8", show=False)
     sh(d, "bash /tmp/deploy_all/fix_crlf_and_start.sh 2>&1 | tail -4", show=False)
     # NTP serving guard: board watchdog must match the repo's script+conf
