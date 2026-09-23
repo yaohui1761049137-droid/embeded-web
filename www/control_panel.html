@@ -255,7 +255,7 @@ if (!document.cookie.match(/csrf_token=/)) {
 
 <!-- 请求量趋势 -->
 <div class="config-panel">
-<div class="panel-header">chrony 请求量趋势（<span id="ttl-req">近 1 分钟</span>）</div>
+<div class="panel-header">请求量趋势（<span id="ttl-req">近 1 分钟</span>）</div>
 <div class="panel-body">
 <div class="stat-cards">
 <div class="stat-card"><div class="k">当前速率</div><div class="v" id="mon-cur">—<span class="u">条/分</span></div></div>
@@ -326,9 +326,9 @@ if (!document.cookie.match(/csrf_token=/)) {
 </style>
 <h2>时间服务校验设置</h2>
 
-<!-- PPS+TOD+chrony 授时状态（timesync.cgi 每 3s 轮询刷新） -->
+<!-- 授时状态（timesync.cgi 每 3s 轮询刷新） -->
 <div class="config-panel">
-<div class="panel-header">PPS + TOD + chrony 授时状态</div>
+<div class="panel-header">授时状态</div>
 <div class="panel-body">
 <table class="config-table">
 <tr><td class="config-label">授时源</td><td class="config-value" id="ts-src">—</td></tr>
@@ -353,9 +353,9 @@ if (!document.cookie.match(/csrf_token=/)) {
 </div>
 </div>
 
-<!-- UT986 接收机工作模式（$CFGGNSS + $CFGSAVE） -->
+<!-- 接收机工作模式（$CFGGNSS + $CFGSAVE） -->
 <div class="config-panel">
-<div class="panel-header">UT986 接收机工作模式</div>
+<div class="panel-header">接收机工作模式</div>
 <div class="panel-body">
 <table class="config-table">
 <tr>

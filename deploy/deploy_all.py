@@ -1,10 +1,10 @@
 """deploy_all.py — one-click deployment driver for embeded-web on LubanCat.
 
 Chains the foolproof-deploy.md Step1-Step8 flow (Step9 timing optional):
-SSH bootstrap -> offline deps -> HTTPS phase -> CGI build -> panel password ->
-system integration (+ time-wait-sync mask) -> verification 12/12 ->
-(optional) --with-timing timing stack + NTP serving guard ->
-(optional) --reboot re-test.
+SSH bootstrap -> hostname & banner identity -> offline deps -> HTTPS phase ->
+CGI build -> panel password -> system integration (+ time-wait-sync mask) ->
+verification 12/12 -> (optional) --with-timing timing stack + NTP serving
+guard -> (optional) --reboot re-test.
 
 Every stage is idempotent: it detects what is already deployed and skips it,
 so the driver can be re-run safely on a partially deployed board.  Board-side
@@ -16,7 +16,7 @@ Usage (PC, python 3.10+ with paramiko):
     python deploy/deploy_all.py                      # defaults below
     python deploy/deploy_all.py --with-timing        # + Step9 (needs UT986 wiring)
     python deploy/deploy_all.py --reboot             # + Step8 reboot re-test
-Flags: --host --user --board-password --panel-password --force-build
+Flags: --host --user --board-password --hostname --panel-password --force-build
 """
 import argparse
 import http.cookiejar
@@ -133,6 +133,33 @@ def stage_preflight(d, opt):
                       "id www-data && echo www-data-ok")
     print("  " + "\n  ".join(out.rstrip().splitlines()[:9]))
     return "aarch64" in out and "www-data-ok" in out
+
+
+def stage_identity(d, opt):
+    """Board personalization: hostname (root@<name>) + clean SSH banner.
+
+    Idempotent and reversible: chmod +x on /etc/update-motd.d/* restores
+    the vendor login banner; the hostname is simply re-set."""
+    _, out, _ = d.run("hostname")
+    cur = out.strip()
+    if cur != opt.hostname:
+        print("  [identity] hostname %s -> %s" % (cur or "?", opt.hostname))
+        d.run("hostnamectl set-hostname %s 2>&1 | tail -1" % opt.hostname)
+        d.run("sed -i 's/127\\.0\\.1\\.1[[:space:]]*[A-Za-z0-9._-]*/"
+              "127.0.1.1 %s/' /etc/hosts" % opt.hostname)
+        d.run("grep -q '127.0.1.1 %s' /etc/hosts || "
+              "echo '127.0.1.1 %s' >> /etc/hosts" % (opt.hostname, opt.hostname))
+    d.run("chmod -x /etc/update-motd.d/00-header /etc/update-motd.d/10-help-text "
+          "/etc/update-motd.d/10-uname /etc/update-motd.d/30-sysinfo 2>/dev/null")
+    _, out, _ = d.run("hostname; [ -x /etc/update-motd.d/00-header ] "
+                      "&& echo banner-on || echo banner-off")
+    lines = out.strip().splitlines()
+    ok = (bool(lines) and lines[0].strip() == opt.hostname
+          and "banner-off" in out)
+    print("  [identity] hostname=%s banner=%s" % (
+        lines[0].strip() if lines else "?",
+        "off" if "banner-off" in out else "on"))
+    return ok
 
 
 def stage_deps(d, opt):
@@ -444,6 +471,7 @@ def stage_reboot_retest(d, opt):
 
 STAGES = {
     "preflight": stage_preflight,
+    "identity": stage_identity,
     "deps": stage_deps,
     "https": stage_https,
     "cgi": stage_cgi,
@@ -460,6 +488,8 @@ def main():
     ap.add_argument("--host", default="192.168.1.111")
     ap.add_argument("--user", default="root")
     ap.add_argument("--board-password", default="root")
+    ap.add_argument("--hostname", default="N5100",
+                    help="主机名（root@<name>），部署时自动设置")
     ap.add_argument("--panel-password", default="Testpassword1234@@")
     ap.add_argument("--with-timing", action="store_true",
                     help="Step9 授时链路（需 UT986 接线）")
@@ -475,7 +505,8 @@ def main():
               "ssh-keygen -A && mkdir -p /run/sshd && sshd -t（详见手册 §2）")
         return 1
 
-    order = ["preflight", "deps", "https", "cgi", "password", "integrate"]
+    order = ["preflight", "identity", "deps", "https", "cgi", "password",
+             "integrate"]
     if opt.with_timing:
         order.append("timing")
     order.append("verify")
