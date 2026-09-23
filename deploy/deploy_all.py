@@ -227,18 +227,23 @@ def stage_cgi(d, opt):
     with tarfile.open(tgz, "w:gz") as tf:
         tf.add(srcdir, arcname="src")
     d.upload(tgz)
-    for f in os.listdir(wwwdir):
-        p = os.path.join(wwwdir, f)
-        if os.path.isfile(p):
-            d.upload(p)
+    www_files = [f for f in os.listdir(wwwdir)
+                 if os.path.isfile(os.path.join(wwwdir, f))]
+    for f in www_files:
+        d.upload(os.path.join(wwwdir, f))
     d.upload(find_script("build_on_board.sh"))
+    # board scripts (build_on_board.sh et al.) expect their inputs flat in
+    # /tmp, not in /tmp/deploy_all — mirror them there (clean-board safe)
+    d.run("cp /tmp/deploy_all/src.tar.gz %s /tmp/" %
+          " ".join("/tmp/deploy_all/" + f for f in www_files))
     ok, out = sh(d, "bash /tmp/deploy_all/build_on_board.sh 2>&1 | tail -20")
     print("  [cgi] %s" % ("OK" if "DEPLOY-OK" in out else "FAIL"))
     return "DEPLOY-OK" in out
 
 
 def do_password(host, panel_pw):
-    """Login flow: already-set → skip; fresh DB (root/admin) → forced change."""
+    """Login outcomes: correct pw -> 302 main.cgi; fresh DB (admin) ->
+    302 change (forced); wrong pw -> 200 JSON error, no redirect."""
     cj = http.cookiejar.CookieJar()
 
     class NR(urllib.request.HTTPRedirectHandler):
@@ -249,39 +254,52 @@ def do_password(host, panel_pw):
         urllib.request.HTTPCookieProcessor(cj),
         urllib.request.HTTPSHandler(context=ctx()), NR)
     base = "https://%s" % host
-    for pw in (panel_pw, "admin"):
+
+    def login(pw):
         try:
-            op.open(urllib.request.Request(
+            r = op.open(urllib.request.Request(
                 base + "/cgi-bin/login.cgi",
                 data=urllib.parse.urlencode({"user": "root", "pass": pw}).encode()),
                 timeout=10)
-            # followed redirect → session up with this password already
-            print("  [password] login as %s → session OK" %
-                  ("panel" if pw == panel_pw else "initial"))
-            if pw == panel_pw:
-                return True
-            return False  # admin session but panel password differs: user must set
+            return "reject", r.read().decode(errors="replace")[:80]
         except urllib.error.HTTPError as e:
             loc = dict(e.headers).get("Location", "")
             if "main.cgi" in loc:
-                print("  [password] already set — skip")
-                return True
+                return "main", ""
             if "change" in loc:
-                print("  [password] first login as %s → forced change" % pw)
-                csrf = next((c.value for c in cj if c.name == "csrf_token"), "")
-                r = op.open(urllib.request.Request(
-                    base + "/cgi-bin/user_change_pass.cgi",
-                    data=urllib.parse.urlencode({
-                        "old_password": pw,
-                        "new_password": panel_pw,
-                        "csrf_token": csrf}).encode()), timeout=10)
-                body = r.read().decode(errors="replace")
-                print("  [password] change →", body.strip()[:100])
-                if '"ok"' in body:
-                    print("  [password] panel password now set — record it!")
-                    return True
-                return False
-            print("  [password] rejected (%s): %s %s" % (pw, e.code, loc))
+                return "change", ""
+            return "reject", loc
+
+    def set_password(old):
+        csrf = next((c.value for c in cj if c.name == "csrf_token"), "")
+        r = op.open(urllib.request.Request(
+            base + "/cgi-bin/user_change_pass.cgi",
+            data=urllib.parse.urlencode({
+                "old_password": old,
+                "new_password": panel_pw,
+                "csrf_token": csrf}).encode()), timeout=10)
+        return '"ok"' in r.read().decode(errors="replace")
+
+    for pw in (panel_pw, "admin"):
+        kind, detail = login(pw)
+        if kind == "main" and pw == panel_pw:
+            print("  [password] already set — skip")
+            return True
+        if kind == "main" and pw == "admin":
+            # initial admin logs straight in (no forced change) — set pw here
+            if set_password("admin") and login(panel_pw)[0] == "main":
+                print("  [password] panel password now set — record it!")
+                return True
+            print("  [password] FAIL — could not set panel password")
+            return False
+        if kind == "change":
+            print("  [password] first login as %s → forced change" % pw)
+            if set_password(pw) and login(panel_pw)[0] == "main":
+                print("  [password] panel password now set — record it!")
+                return True
+            print("  [password] FAIL — forced change did not take")
+            return False
+        print("  [password] %s rejected (%s)" % (pw, detail))
     print("  [password] FAIL — panel/初始密码都无法登录")
     return False
 
@@ -295,12 +313,23 @@ def stage_integrate(d, opt):
                       "[ -x /usr/local/bin/ntp_nic_monitor ] && "
                       "echo present || echo missing")
     if "missing" in out:
+        # mask BEFORE the script: on a clean board time-wait-sync never
+        # completes (no reachable time source), its start job pins the boot
+        # transaction and every systemctl start inside hangs forever
+        d.run("systemctl disable --now systemd-time-wait-sync 2>/dev/null; "
+              "systemctl mask systemd-time-wait-sync 2>&1 | tail -1")
         for f in ("chrony_acl_apply.sh", "ntp_stats_sample.sh", "ntp_nic_monitor.c",
                   "ntp-stats.service", "ntp-stats.timer", "ntp-nic-monitor.service",
                   "rollback_watchdog.sh", "rollback-recover.service"):
             d.upload(find(os.path.join(REPO, f)))
+        # integrate_system.sh reads these flat from /tmp — mirror them there
+        d.run("cp /tmp/deploy_all/chrony_acl_apply.sh /tmp/deploy_all/ntp_stats_sample.sh "
+              "/tmp/deploy_all/ntp_nic_monitor.c /tmp/deploy_all/ntp-stats.service "
+              "/tmp/deploy_all/ntp-stats.timer /tmp/deploy_all/ntp-nic-monitor.service "
+              "/tmp/deploy_all/rollback_watchdog.sh /tmp/deploy_all/rollback-recover.service /tmp/")
         d.upload(find_script("integrate_system.sh"))
-        ok, out = sh(d, "bash /tmp/deploy_all/integrate_system.sh 2>&1 | tail -6")
+        ok, out = sh(d, "bash /tmp/deploy_all/integrate_system.sh 2>&1 | tail -6",
+                     timeout=600)
         if "INTEGRATION-OK" not in out:
             print("  [integrate] FAIL")
             return False
@@ -337,6 +366,19 @@ def stage_timing(d, opt):
             if os.path.isfile(p):
                 self_put = d.sftp.put(p, "/tmp/" + f)
     sh(d, "bash /tmp/deploy_all/install_timing_stack.sh 2>&1 | tail -8", show=False)
+    # install_timing_stack.sh pipes gcc into head, so a build failure is
+    # swallowed under set -e — verify the binary and rebuild if missing
+    _, out, _ = d.run("[ -x /usr/local/bin/pps_tod ] && echo ok || echo missing")
+    if "missing" in out:
+        print("  [timing] /usr/local/bin/pps_tod missing — rebuilding…")
+        sh(d, "gcc -O2 -Wall -o /usr/local/bin/pps_tod /tmp/pps_tod.c -lpthread "
+              "2>&1 | tail -5", timeout=600)
+        _, out, _ = d.run("[ -x /usr/local/bin/pps_tod ] && echo ok || echo missing")
+        if "missing" in out:
+            print("  [timing] FAIL: pps_tod binary still missing after rebuild")
+            return False
+        sh(d, "systemctl daemon-reload; systemctl restart pps_tod "
+              "pps_tod_watchdog 2>&1 | tail -2")
     sh(d, "bash /tmp/deploy_all/fix_crlf_and_start.sh 2>&1 | tail -4", show=False)
     # NTP serving guard: board watchdog must match the repo's script+conf
     import hashlib
@@ -362,10 +404,18 @@ def stage_timing(d, opt):
     _, out, _ = d.run("systemctl is-active pps_tod pps_tod_watchdog chrony; "
                       "cat /run/pps_tod/status /run/pps_tod/watchdog.state 2>/dev/null")
     print("  " + "\n  ".join(out.rstrip().splitlines()[:22]))
-    ok = "good=1" in out and "ntp_serving=on" in out
-    print("  [timing] %s（无 UT986 硬件时 sources 不可达、good=0 属预期，不阻塞）" %
-          ("OK" if ok else "NOT-LOCKED（见上方状态）"))
-    return ok
+    locked = "good=1" in out and "ntp_serving=on" in out
+    # stage pass = timing stack installed & running; GNSS lock (good=1) needs
+    # UT986 wiring + satellites and must not abort verify/reboot stages
+    _, svc, _ = d.run("systemctl is-enabled pps_tod pps_tod_watchdog 2>/dev/null; "
+                      "systemctl is-active pps_tod pps_tod_watchdog chrony; "
+                      "[ -e /dev/ttyS7 ] && echo ttyS7-present || echo ttyS7-missing")
+    stack_ok = (svc.count("enabled") == 2 and svc.count("active") == 3
+                and "ttyS7-present" in svc)
+    print("  [timing] stack=%s lock=%s%s" % (
+        "OK" if stack_ok else "FAIL", "OK" if locked else "not-locked",
+        "" if locked else "（无 UT986/未锁星属预期，接线后自动 good=1，不阻塞）"))
+    return stack_ok
 
 
 def stage_verify(d, opt):

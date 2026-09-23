@@ -14,7 +14,7 @@ import urllib.request
 
 BASE = "https://192.168.1.111"
 USER = "root"
-PASS = "Testpassword1234@"
+PASS = "Testpassword1234@@"
 
 ctx = ssl._create_unverified_context()
 cj = http.cookiejar.CookieJar()
