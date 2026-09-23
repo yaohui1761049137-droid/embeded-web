@@ -144,7 +144,10 @@ def stage_identity(d, opt):
     cur = out.strip()
     if cur != opt.hostname:
         print("  [identity] hostname %s -> %s" % (cur or "?", opt.hostname))
-        d.run("hostnamectl set-hostname %s 2>&1 | tail -1" % opt.hostname)
+        # direct file write + hostname -F: hostnamectl needs a working
+        # polkit/dbus session and can fail with "Access denied" over SSH
+        d.run("echo %s > /etc/hostname && hostname -F /etc/hostname" %
+              opt.hostname)
         d.run("sed -i 's/127\\.0\\.1\\.1[[:space:]]*[A-Za-z0-9._-]*/"
               "127.0.1.1 %s/' /etc/hosts" % opt.hostname)
         d.run("grep -q '127.0.1.1 %s' /etc/hosts || "
