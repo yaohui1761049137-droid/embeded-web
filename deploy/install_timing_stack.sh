@@ -5,8 +5,7 @@
 set -e
 
 echo '== compile pps_tod =='
-gcc -O2 -Wall -o /usr/local/bin/pps_tod /tmp/pps_tod.c -lpthread
-test -x /usr/local/bin/pps_tod || { echo 'COMPILE-FAILED: /usr/local/bin/pps_tod 未生成'; exit 1; }
+gcc -O2 -Wall -o /usr/local/bin/pps_tod /tmp/pps_tod.c -lpthread 2>/tmp/gcc_pps_tod.log || { tail -5 /tmp/gcc_pps_tod.log; exit 1; }
 echo '== scripts + conf =='
 cp /tmp/pps_tod_watchdog.sh /tmp/pps_tod_rtc_save.sh /tmp/sanitize-drift.sh /usr/local/bin/
 chmod 755 /usr/local/bin/pps_tod_watchdog.sh /usr/local/bin/pps_tod_rtc_save.sh /usr/local/bin/sanitize-drift.sh
